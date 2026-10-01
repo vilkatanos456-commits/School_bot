@@ -507,22 +507,6 @@ def book_path(subject):
 # ===========================================================================
 # Основной конвейер
 # ===========================================================================
-def dispatch(message, mode, subject, task, media):
-    """Если предмет неизвестен - показывает кнопки, иначе запускает обработку."""
-    uid = message.from_user.id
-    if subject is None:
-        pending[uid] = {"mode": mode, "task": task, "media": media, "reply_to": message.message_id}
-        bot.reply_to(message, "Выбери предмет:", reply_markup=subjects_keyboard())
-        return
-    process(message.chat.id, message.message_id, uid, message.from_user.first_name,
-            mode, subject, task, media)
-
-
-def process(chat_id, reply_to, uid, name, mode, subject, task, media):
-    if limit_reached(uid):
-        bot.send_message(chat_id, f"Дневной лимит ({DAILY_LIMIT} запросов) исчерпан. Приходи завтра!",
-                         reply_to_message_id=reply_to)
-        return
 
     # Словарь с твоим расписанием 8-Б
 
@@ -622,12 +606,7 @@ def parse_smart_hw(call):
         bot.edit_message_text(f"Сайт недоступен. Ошибка: {e}",
                               call.message.chat.id, call.message.message_id)
 
-    except Exception as e:
-        bot.edit_message_text(f"Сайт недоступен. Ошибка: {e}",
-                              call.message.chat.id, call.message.message_id)
 
-    except Exception as e:
-        bot.edit_message_text(f"Сайт недоступен. Ошибка: {e}", call.message.chat.id, call.message.message_id)
 def dispatch(message, mode, subject, task, media):
     """Если предмет неизвестен - показывает кнопки, иначе запускает обработку."""
     uid = message.from_user.id
@@ -959,59 +938,7 @@ def on_text(message):
         bot.reply_to(message, f"Предмет выбран: {subject}. Теперь пиши задание.")
         return
     subject = subject or settings[uid]["subject"]
-    dispatch(message, "answer", subject, task, [])
-
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("hw_"))
-def parse_smart_hw(call):
-    day_index = call.data.split("_")[1]
-    subjects_today = SCHEDULE[day_index]
-
-    bot.edit_message_text("Сканирую сайт школы... 🕵️‍♂️", call.message.chat.id, call.message.message_id)
-
-    try:
-        url = "https://sch3.edu.vn.ua/disted"
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-        response = requests.post(url, data={'class': '24'}, headers=headers, timeout=10)
-        response.encoding = 'utf-8'
-        soup = BeautifulSoup(response.text, 'html.parser')
-
-        # Словарь, чтобы хранить только самую свежую домашку по каждому предмету
-        latest_tasks = {}
-
-        rows = soup.find_all('tr')
-        for row in rows:
-            cols = row.find_all('td')
-            if len(cols) >= 5:
-                lesson_date = cols[0].text.strip()
-                subject = cols[3].text.strip()
-
-                # Проверяем, есть ли этот предмет в расписании на этот день
-                if subject in subjects_today:
-                    task = cols[-1].text.strip()
-
-                    # Если предмет еще не записан или дата новее (простая проверка по строке даты)
-                    # Чтобы не показывало старье, берем только то, что записано впервые (сайт обычно идет от новых к старым)
-                    if subject not in latest_tasks:
-                        latest_tasks[subject] = (lesson_date, task)
-
-        hw_text = f"📚 **Актуальная домашка:**\n\n"
-        for subject in subjects_today:
-            if subject in latest_tasks:
-                lesson_date, task = latest_tasks[subject]
-                hw_text += f"🔹 **{subject}** ({lesson_date})\n{task}\n\n"
-
-        if len(latest_tasks) == 0:
-            hw_text = "На этот день свежих заданий на сайте пока нет."
-
-        from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-        markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton("🗑", callback_data="delete_msg"))
-
-        bot.edit_message_text(hw_text, call.message.chat.id, call.message.message_id, reply_markup=markup)
-
-    except Exception as e:
-        bot.edit_message_text(f"Сайт недоступен. Ошибка: {e}", call.message.chat.id, call.message.message_id)
+    dispatch(message, "answer", subject, task, [])# Словарь с твоим расписанием 8-Б
 
 # ===========================================================================
 # Мини-веб-сервер (нужен Render, чтобы считать сервис живым; на него же
