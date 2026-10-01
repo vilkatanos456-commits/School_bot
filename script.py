@@ -542,7 +542,7 @@ HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
 
 
 def fetch_task_text(url):
-    """Достаёт текст после заголовка 'Домашнє завдання' и до блока новостей."""
+    """Достаёт текст после заголовка 'Домашнє завдання' до новостей/подвала сайта."""
     try:
         r = requests.get(url, headers=HEADERS, timeout=10)
         r.encoding = 'utf-8'
@@ -556,16 +556,17 @@ def fetch_task_text(url):
             return ""
         text = page[m.end():]
 
-        # обрезаем боковую колонку с новостями
-        stop = re.search(r'ОСТАННІ\s+НОВИНИ', text, re.I)
-        if stop:
-            text = text[:stop.start()]
+        # обрезаем по первому из маркеров: боковая колонка новостей или подвал сайта
+        cut = len(text)
+        for marker in (r'ОСТАННІ\s+НОВИНИ', r'Про\s+нас', r'Комунальний\s+заклад'):
+            s = re.search(marker, text, re.I)
+            if s:
+                cut = min(cut, s.start())
 
-        return text.strip()
+        return text[:cut].strip()
     except Exception:
         log.exception("Не удалось открыть %s", url)
         return ""
-
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("hw_"))
 def parse_smart_hw(call):
