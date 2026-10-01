@@ -34,7 +34,7 @@ def _split_env(name):
     return [x.strip() for x in re.split(r"[,\n;]+", raw) if x.strip()]
 
 
-TELEGRAM_TOKEN = os.environ.get("8349218039:AAFPm8nqWvWlStgv-OeGO-dl78J7r8psxg4", "")
+TELEGRAM_TOKEN = os.environ.get("", "")
 API_KEYS = _split_env("GEMINI_API_KEYS") or _split_env("GEMINI_API_KEY")
 MODELS = _split_env("GEMINI_MODELS") or ["gemini-3.5-flash-lite"]
 ALLOWED_IDS = {int(x) for x in _split_env("0")}
