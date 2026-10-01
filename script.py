@@ -121,7 +121,6 @@ logging.getLogger("pypdf").setLevel(logging.ERROR)
 log = logging.getLogger("homework_bot")
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN, threaded=True)
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 @bot.callback_query_handler(func=lambda call: call.data == "delete_msg")
 def shredder(call):
@@ -568,42 +567,42 @@ def parse_smart_hw(call):
         soup = BeautifulSoup(response.text, 'html.parser')
 
         latest_tasks = {}
-
         rows = soup.find_all('tr')
         for row in rows:
             cols = row.find_all('td')
             if len(cols) >= 5:
                 lesson_date = cols[0].text.strip()
                 subject = cols[3].text.strip()
-
-                # Проверяем, есть ли этот предмет в расписании на выбранный день
                 if subject in subjects_today:
-                    # Ищем тег ссылки <a> внутри строки
                     a_tag = row.find('a')
                     if a_tag and 'href' in a_tag.attrs:
                         task_link = "https://sch3.edu.vn.ua" + a_tag['href']
                     else:
                         task_link = "https://sch3.edu.vn.ua/disted"
-
-                    # Берем самую первую (самую свежую) запись для предмета
                     if subject not in latest_tasks:
                         latest_tasks[subject] = (lesson_date, task_link)
 
-        hw_text = f"📚 **Актуальная домашка:**\n\n"
+        hw_text = "📚 <b>Актуальная домашка:</b>\n\n"
         for subject in subjects_today:
             if subject in latest_tasks:
                 lesson_date, task_link = latest_tasks[subject]
-                hw_text += f"🔹 **{subject}** ({lesson_date})\n[📂 Открыть задание]({task_link})\n\n"
+                # html.escape спасает от символов < > & в названиях
+                s = html.escape(subject)
+                d = html.escape(lesson_date)
+                hw_text += f'🔹 <b>{s}</b> ({d})\n<a href="{task_link}">📂 Открыть задание</a>\n\n'
 
-        if len(latest_tasks) == 0:
+        if not latest_tasks:
             hw_text = "На этот день свежих заданий на сайте пока нет."
 
-        from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
         markup = InlineKeyboardMarkup()
         markup.add(InlineKeyboardButton("🗑", callback_data="delete_msg"))
 
-        bot.edit_message_text(hw_text, call.message.chat.id, call.message.message_id, parse_mode='Markdown',
-                              reply_markup=markup)
+        bot.edit_message_text(hw_text, call.message.chat.id, call.message.message_id,
+                              parse_mode="HTML", reply_markup=markup)
+
+    except Exception as e:
+        bot.edit_message_text(f"Сайт недоступен. Ошибка: {e}",
+                              call.message.chat.id, call.message.message_id)
 
     except Exception as e:
         bot.edit_message_text(f"Сайт недоступен. Ошибка: {e}", call.message.chat.id, call.message.message_id)
