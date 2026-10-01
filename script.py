@@ -1,5 +1,6 @@
 import hashlib
 import html
+import requests
 import json
 import logging
 import os
@@ -8,6 +9,7 @@ import re
 import threading
 import time
 from collections import Counter, defaultdict
+from bs4 import BeautifulSoup
 from datetime import date
 from difflib import get_close_matches
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -17,7 +19,6 @@ from telebot import types as tg
 from google import genai
 from google.genai import types as gt
 from pypdf import PdfReader
-
 # ===========================================================================
 # Настройки - ВСЕ секреты только через переменные окружения (Render -> Environment)
 # ===========================================================================
@@ -120,6 +121,18 @@ logging.getLogger("pypdf").setLevel(logging.ERROR)
 log = logging.getLogger("homework_bot")
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN, threaded=True)
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+@bot.callback_query_handler(func=lambda call: call.data == "delete_msg")
+def shredder(call):
+    try:
+        # Удаляем ответ бота
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+        # Удаляем твое сообщение с вопросом/фоткой (оно идет прямо перед ответом)
+        bot.delete_message(call.message.chat.id, call.message.message_id - 1)
+    except Exception:
+        pass # Если не вышло удалить, бот просто проигнорирует ошибку и не крашнется
+        pass # Если не вышло удалить, бот просто проигнорирует ошибку и не крашнется
 
 # ===========================================================================
 # Состояние пользователей
@@ -204,27 +217,34 @@ def split_message(text, limit=TG_LIMIT):
     return parts
 
 
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+
 def send_answer(chat_id, status_msg, text):
     """Сначала пробует HTML; если Telegram не принял разметку - шлёт чистым текстом."""
+
+    # Создаем кнопку-шредер
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("🗑", callback_data="delete_msg"))
+
     for n, chunk in enumerate(split_message(sanitize_html(text))):
         first = n == 0
         try:
             if first:
-                bot.edit_message_text(chunk, chat_id, status_msg.message_id, parse_mode="HTML")
+                bot.edit_message_text(chunk, chat_id, status_msg.message_id, parse_mode="HTML", reply_markup=markup)
             else:
-                bot.send_message(chat_id, chunk, parse_mode="HTML")
+                bot.send_message(chat_id, chunk, parse_mode="HTML", reply_markup=markup)
             continue
         except Exception as e:
             log.warning("HTML не прошёл, отправляю без разметки: %s", e)
         plain = strip_tags(chunk)
         try:
             if first:
-                bot.edit_message_text(plain, chat_id, status_msg.message_id)
+                bot.edit_message_text(plain, chat_id, status_msg.message_id, reply_markup=markup)
             else:
-                bot.send_message(chat_id, plain)
+                bot.send_message(chat_id, plain, reply_markup=markup)
         except Exception:
-            bot.send_message(chat_id, plain)
-
+            bot.send_message(chat_id, plain, reply_markup=markup)
 
 # ===========================================================================
 # PDF: загрузка, кэш, поиск нужных страниц
@@ -504,6 +524,75 @@ def process(chat_id, reply_to, uid, name, mode, subject, task, media):
         bot.send_message(chat_id, f"Дневной лимит ({DAILY_LIMIT} запросов) исчерпан. Приходи завтра!",
                          reply_to_message_id=reply_to)
         return
+
+    # Словарь с твоим расписанием 8-Б
+
+    SCHEDULE = {
+        "0": ["Географія", "Біологія", "Геометрія", "Фінансова грамотність", "Фізика", "Українська література"],
+        "1": ["Фізика", "Алгебра", "Англійська мова", "Інформатика", "Українська мова", "Історія"],
+        "2": ["Алгебра", "Англійська мова", "Фіз. виховання", "Зарубіжна література", "Основи здоров'я", "Інформатика",
+              "Трудове навчання"],
+        "3": ["Фіз. виховання", "Історія", "Українська мова", "Українська література", "Географія", "Хімія",
+              "Англійська мова"],
+        "4": ["Англійська мова", "Українська мова", "Біологія", "Алгебра", "Фіз. виховання", "Мистецтво", "Хімія"]
+    }
+
+    @bot.message_handler(commands=['hw'])
+    def hw_menu(message):
+        from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+        markup = InlineKeyboardMarkup()
+        # Создаем кнопки с днями недели
+        markup.row(InlineKeyboardButton("ПН", callback_data="hw_0"),
+                   InlineKeyboardButton("ВТ", callback_data="hw_1"),
+                   InlineKeyboardButton("СР", callback_data="hw_2"))
+        markup.row(InlineKeyboardButton("ЧТ", callback_data="hw_3"),
+                   InlineKeyboardButton("ПТ", callback_data="hw_4"))
+        markup.add(InlineKeyboardButton("🗑 Закрыть", callback_data="delete_msg"))
+
+        bot.send_message(message.chat.id, "На какой день собрать домашку?", reply_markup=markup)
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("hw_"))
+    def parse_smart_hw(call):
+        day_index = call.data.split("_")[1]
+        subjects_today = SCHEDULE[day_index]
+
+        bot.edit_message_text("Сканирую сайт школы... 🕵️‍♂️", call.message.chat.id, call.message.message_id)
+
+        try:
+            url = "https://sch3.edu.vn.ua/disted"
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+            response = requests.post(url, data={'class': '24'}, headers=headers, timeout=10)
+            response.encoding = 'utf-8'
+            soup = BeautifulSoup(response.text, 'html.parser')
+
+            hw_text = f"📚 **Домашка:**\n\n"
+
+            # Ищем все строки таблицы <tr>
+            rows = soup.find_all('tr')
+            for row in rows:
+                cols = row.find_all('td')
+                # Проверяем, что в строке есть ячейки с датой и предметом
+                if len(cols) >= 5:
+                    lesson_date = cols[0].text.strip()
+                    subject = cols[3].text.strip()
+
+                    # Если предмет совпадает с расписанием на выбранный день
+                    if subject in subjects_today:
+                        # Задание обычно лежит в последней ячейке строки
+                        task = cols[-1].text.strip()
+                        hw_text += f"🔹 **{subject}** ({lesson_date})\n{task}\n\n"
+
+            if hw_text == f"📚 **Домашка:**\n\n":
+                hw_text = "На этот день свежих заданий на сайте пока нет."
+
+            from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+            markup = InlineKeyboardMarkup()
+            markup.add(InlineKeyboardButton("🗑", callback_data="delete_msg"))
+
+            bot.edit_message_text(hw_text, call.message.chat.id, call.message.message_id, reply_markup=markup)
+
+        except Exception as e:
+            bot.edit_message_text(f"Сайт недоступен. Ошибка: {e}", call.message.chat.id, call.message.message_id)
 
     status = bot.send_message(chat_id, "Ищу ответ в учебнике... ⏱️", reply_to_message_id=reply_to)
     bot.send_chat_action(chat_id, "typing")
