@@ -34,10 +34,10 @@ def _split_env(name):
     return [x.strip() for x in re.split(r"[,\n;]+", raw) if x.strip()]
 
 
-TELEGRAM_TOKEN = os.environ.get("", "")
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 API_KEYS = _split_env("GEMINI_API_KEYS") or _split_env("GEMINI_API_KEY")
 MODELS = _split_env("GEMINI_MODELS") or ["gemini-3.5-flash-lite"]
-ALLOWED_IDS = {int(x) for x in _split_env("0")}
+ALLOWED_IDS = {int(x) for x in _split_env("ALLOWED_IDS")}
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "0") or 0)
 DAILY_LIMIT = int(os.environ.get("DAILY_LIMIT", "40"))
 TOP_PAGES = int(os.environ.get("TOP_PAGES", "2"))
@@ -574,15 +574,17 @@ try:
     from zoneinfo import ZoneInfo
     KYIV = ZoneInfo("Europe/Kyiv")
 except Exception:
-    KYIV = timezone(timedelta(hours=3))  # запасной вариант, если нет базы часовых поясов
+    KYIV = timezone(timedelta(hours=3))  # запасной вариант
 
-    def is_future(lesson_date):
-        """True, если дата урока (дд.мм.гггг) позже сегодняшней по Киеву."""
-        try:
-            d = datetime.strptime(lesson_date.strip(), "%d.%m.%Y").date()
-            return d > datetime.now(KYIV).date()
-        except ValueError:
-            return False  # если дату не разобрать, задание не скрываем
+
+def is_future(lesson_date):
+    """True, если дата урока (дд.мм.гггг) позже сегодняшней по Киеву."""
+    try:
+        d = datetime.strptime(lesson_date.strip(), "%d.%m.%Y").date()
+        return d > datetime.now(KYIV).date()
+    except ValueError:
+        return False  # если дату не разобрать, задание не скрываем
+
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("hw_"))
 def parse_smart_hw(call):
