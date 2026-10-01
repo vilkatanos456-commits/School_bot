@@ -568,6 +568,22 @@ def fetch_task_text(url):
         log.exception("Не удалось открыть %s", url)
         return ""
 
+from datetime import datetime, timezone, timedelta
+
+try:
+    from zoneinfo import ZoneInfo
+    KYIV = ZoneInfo("Europe/Kyiv")
+except Exception:
+    KYIV = timezone(timedelta(hours=3))  # запасной вариант, если нет базы часовых поясов
+
+    def is_future(lesson_date):
+        """True, если дата урока (дд.мм.гггг) позже сегодняшней по Киеву."""
+        try:
+            d = datetime.strptime(lesson_date.strip(), "%d.%m.%Y").date()
+            return d > datetime.now(KYIV).date()
+        except ValueError:
+            return False  # если дату не разобрать, задание не скрываем
+
 @bot.callback_query_handler(func=lambda call: call.data.startswith("hw_"))
 def parse_smart_hw(call):
     day_index = call.data.split("_")[1]
@@ -594,7 +610,7 @@ def parse_smart_hw(call):
             if len(cols) >= 5:
                 lesson_date = cols[0].text.strip()
                 subject = cols[3].text.strip()
-                if subject in subjects_today and subject not in latest_tasks:
+                if subject in subjects_today and subject not in latest_tasks and not is_future(lesson_date):
                     a_tag = row.find('a')
                     if a_tag and 'href' in a_tag.attrs:
                         href = a_tag['href']
