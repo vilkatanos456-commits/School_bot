@@ -542,17 +542,26 @@ HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
 
 
 def fetch_task_text(url):
-    """Заходит на страницу задания и достаёт из неё текст."""
+    """Достаёт текст после заголовка 'Домашнє завдання' и до блока новостей."""
     try:
         r = requests.get(url, headers=HEADERS, timeout=10)
         r.encoding = 'utf-8'
         soup = BeautifulSoup(r.text, 'html.parser')
-        for t in soup(['script', 'style', 'nav', 'header', 'footer']):
+        for t in soup(['script', 'style']):
             t.decompose()
-        node = (soup.find('article') or soup.find('main')
-                or soup.find(class_=re.compile(r'content|task|lesson|body', re.I))
-                or soup.body)
-        return node.get_text('\n', strip=True) if node else ""
+        page = soup.get_text('\n', strip=True)
+
+        m = re.search(r'Домашнє\s+завдання', page, re.I)
+        if not m:
+            return ""
+        text = page[m.end():]
+
+        # обрезаем боковую колонку с новостями
+        stop = re.search(r'ОСТАННІ\s+НОВИНИ', text, re.I)
+        if stop:
+            text = text[:stop.start()]
+
+        return text.strip()
     except Exception:
         log.exception("Не удалось открыть %s", url)
         return ""
@@ -562,8 +571,15 @@ def fetch_task_text(url):
 def parse_smart_hw(call):
     day_index = call.data.split("_")[1]
     subjects_today = SCHEDULE[day_index]
+    chat_id = call.message.chat.id
+    msg_id = call.message.message_id
 
-    bot.edit_message_text("Сканирую сайт школы... 🕵️‍♂️", call.message.chat.id, call.message.message_id)
+    try:
+        bot.answer_callback_query(call.id)
+    except Exception:
+        pass
+
+    bot.edit_message_text("Сканирую сайт школы... 🕵️‍♂️", chat_id, msg_id)
 
     try:
         url = "https://sch3.edu.vn.ua/disted"
@@ -587,11 +603,10 @@ def parse_smart_hw(call):
                     latest_tasks[subject] = (lesson_date, task_link)
 
         if not latest_tasks:
-            bot.edit_message_text("На этот день свежих заданий на сайте пока нет.",
-                                  call.message.chat.id, call.message.message_id)
+            bot.edit_message_text("На этот день свежих заданий на сайте пока нет.", chat_id, msg_id)
             return
 
-        # Загружаем страницы заданий параллельно
+        # Страницы заданий грузим параллельно
         subs = [s for s in subjects_today if s in latest_tasks]
         with ThreadPoolExecutor(max_workers=6) as ex:
             texts = list(ex.map(lambda s: fetch_task_text(latest_tasks[s][1]), subs))
@@ -611,33 +626,34 @@ def parse_smart_hw(call):
 
         for i, chunk in enumerate(split_message(hw_text)):
             if i == 0:
-                bot.edit_message_text(chunk, call.message.chat.id, call.message.message_id,
+                bot.edit_message_text(chunk, chat_id, msg_id,
                                       parse_mode="HTML", reply_markup=markup,
                                       disable_web_page_preview=True)
             else:
-                bot.send_message(call.message.chat.id, chunk, parse_mode="HTML",
+                bot.send_message(chat_id, chunk, parse_mode="HTML",
                                  reply_markup=markup, disable_web_page_preview=True)
 
     except Exception as e:
-        bot.edit_message_text(f"Сайт недоступен. Ошибка: {e}",
-                              call.message.chat.id, call.message.message_id)
+        log.exception("Ошибка в /hw")
+        bot.edit_message_text(f"Сайт недоступен. Ошибка: {e}", chat_id, msg_id)
 
-        markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton("🗑", callback_data="delete_msg"))
 
-        # Отправляем частями (если домашки много — она не влезет в одно сообщение)
-        for i, chunk in enumerate(split_message(hw_text)):
-            if i == 0:
-                bot.edit_message_text(chunk, call.message.chat.id, call.message.message_id,
-                                      parse_mode="HTML", reply_markup=markup,
-                                      disable_web_page_preview=True)
-            else:
-                bot.send_message(call.message.chat.id, chunk, parse_mode="HTML",
-                                 reply_markup=markup, disable_web_page_preview=True)
-
-    except Exception as e:
-        bot.edit_message_text(f"Сайт недоступен. Ошибка: {e}",
-                              call.message.chat.id, call.message.message_id)
+@bot.callback_query_handler(func=lambda call: call.data.startswith("subj:"))
+def on_subject_pick(call):
+    """Нажатие на кнопку выбора предмета (раньше обработчика не было)."""
+    uid = call.from_user.id
+    req = pending.pop(uid, None)
+    if not req:
+        bot.answer_callback_query(call.id, "Запрос устарел, отправь задание заново.")
+        return
+    subject = call.data.split(":", 1)[1]
+    bot.answer_callback_query(call.id)
+    try:
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+    except Exception:
+        pass
+    process(call.message.chat.id, req["reply_to"], uid, call.from_user.first_name,
+            req["mode"], subject, req["task"], req["media"])
 
 
 def dispatch(message, mode, subject, task, media):
@@ -709,32 +725,8 @@ def process(chat_id, reply_to, uid, name, mode, subject, task, media):
         log.exception("Ошибка обработки запроса")
         try:
             bot.edit_message_text("Произошла ошибка. Попробуй ещё раз.", chat_id, status.message_id)
-            from concurrent.futures import ThreadPoolExecutor
-
-            HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-
-            def fetch_task_text(url):
-                """Заходит на страницу задания и достаёт из неё текст."""
-                try:
-                    r = requests.get(url, headers=HEADERS, timeout=10)
-                    r.encoding = 'utf-8'
-                    soup = BeautifulSoup(r.text, 'html.parser')
-                    for t in soup(['script', 'style', 'nav', 'header', 'footer']):
-                        t.decompose()
-                    node = (soup.find('article') or soup.find('main')
-                            or soup.find(class_=re.compile(r'content|task|lesson|body', re.I))
-                            or soup.body)
-                    text = node.get_text('\n', strip=True) if node else ""
-                    return text
-                except Exception:
-                    log.exception("Не удалось открыть %s", url)
-                    return ""
         except Exception:
             pass
-
-# ===========================================================================
-# Тесты (викторина опросами Telegram)
-# ===========================================================================
 def parse_json(raw):
     raw = re.sub(r"^```(?:json)?|```$", "", raw.strip(), flags=re.M).strip()
     return json.loads(raw)
