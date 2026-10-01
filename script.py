@@ -918,26 +918,56 @@ def on_text(message):
     dispatch(message, "answer", subject, task, [])
 
 
-@bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("subj:"))
-def on_subject_button(call):
-    uid = call.from_user.id
-    if ALLOWED_IDS and uid not in ALLOWED_IDS and uid != ADMIN_ID:
-        bot.answer_callback_query(call.id, "Нет доступа")
-        return
-    bot.answer_callback_query(call.id)
-    pend = pending.pop(uid, None)
-    chat_id = call.message.chat.id
-    try:
-        bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=None)
-    except Exception:
-        pass
-    if not pend:
-        bot.send_message(chat_id, "Запрос устарел, отправь задание ещё раз.")
-        return
-    key = call.data.split(":", 1)[1]
-    process(chat_id, pend["reply_to"], uid, call.from_user.first_name,
-            pend["mode"], key, pend["task"], pend["media"])
+@bot.callback_query_handler(func=lambda call: call.data.startswith("hw_"))
+def parse_smart_hw(call):
+    day_index = call.data.split("_")[1]
+    subjects_today = SCHEDULE[day_index]
 
+    bot.edit_message_text("Сканирую сайт школы... 🕵️‍♂️", call.message.chat.id, call.message.message_id)
+
+    try:
+        url = "https://sch3.edu.vn.ua/disted"
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        response = requests.post(url, data={'class': '24'}, headers=headers, timeout=10)
+        response.encoding = 'utf-8'
+        soup = BeautifulSoup(response.text, 'html.parser')
+
+        # Словарь, чтобы хранить только самую свежую домашку по каждому предмету
+        latest_tasks = {}
+
+        rows = soup.find_all('tr')
+        for row in rows:
+            cols = row.find_all('td')
+            if len(cols) >= 5:
+                lesson_date = cols[0].text.strip()
+                subject = cols[3].text.strip()
+
+                # Проверяем, есть ли этот предмет в расписании на этот день
+                if subject in subjects_today:
+                    task = cols[-1].text.strip()
+
+                    # Если предмет еще не записан или дата новее (простая проверка по строке даты)
+                    # Чтобы не показывало старье, берем только то, что записано впервые (сайт обычно идет от новых к старым)
+                    if subject not in latest_tasks:
+                        latest_tasks[subject] = (lesson_date, task)
+
+        hw_text = f"📚 **Актуальная домашка:**\n\n"
+        for subject in subjects_today:
+            if subject in latest_tasks:
+                lesson_date, task = latest_tasks[subject]
+                hw_text += f"🔹 **{subject}** ({lesson_date})\n{task}\n\n"
+
+        if len(latest_tasks) == 0:
+            hw_text = "На этот день свежих заданий на сайте пока нет."
+
+        from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton("🗑", callback_data="delete_msg"))
+
+        bot.edit_message_text(hw_text, call.message.chat.id, call.message.message_id, reply_markup=markup)
+
+    except Exception as e:
+        bot.edit_message_text(f"Сайт недоступен. Ошибка: {e}", call.message.chat.id, call.message.message_id)
 
 # ===========================================================================
 # Мини-веб-сервер (нужен Render, чтобы считать сервис живым; на него же
