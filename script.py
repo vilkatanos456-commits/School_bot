@@ -567,38 +567,60 @@ def parse_smart_hw(call):
         soup = BeautifulSoup(response.text, 'html.parser')
 
         latest_tasks = {}
+
         rows = soup.find_all('tr')
         for row in rows:
             cols = row.find_all('td')
             if len(cols) >= 5:
                 lesson_date = cols[0].text.strip()
                 subject = cols[3].text.strip()
-                if subject in subjects_today:
+
+                if subject in subjects_today and subject not in latest_tasks:
+                    # Текст задания — обычно в последней ячейке строки
+                    task_text = cols[-1].text.strip()
+
+                    # Ссылка на источник (оставляем как запасной вариант)
                     a_tag = row.find('a')
                     if a_tag and 'href' in a_tag.attrs:
                         task_link = "https://sch3.edu.vn.ua" + a_tag['href']
                     else:
                         task_link = "https://sch3.edu.vn.ua/disted"
-                    if subject not in latest_tasks:
-                        latest_tasks[subject] = (lesson_date, task_link)
 
+                    latest_tasks[subject] = (lesson_date, task_text, task_link)
+
+        if not latest_tasks:
+            bot.edit_message_text("На этот день свежих заданий на сайте пока нет.",
+                                  call.message.chat.id, call.message.message_id)
+            return
+
+        # Собираем сообщение
         hw_text = "📚 <b>Актуальная домашка:</b>\n\n"
         for subject in subjects_today:
             if subject in latest_tasks:
-                lesson_date, task_link = latest_tasks[subject]
-                # html.escape спасает от символов < > & в названиях
+                lesson_date, task_text, task_link = latest_tasks[subject]
                 s = html.escape(subject)
                 d = html.escape(lesson_date)
-                hw_text += f'🔹 <b>{s}</b> ({d})\n<a href="{task_link}">📂 Открыть задание</a>\n\n'
-
-        if not latest_tasks:
-            hw_text = "На этот день свежих заданий на сайте пока нет."
+                hw_text += f"🔹 <b>{s}</b> ({d})\n"
+                if task_text:
+                    hw_text += html.escape(task_text[:500]) + "\n"
+                hw_text += f'<a href="{task_link}">📂 Открыть источник</a>\n\n'
 
         markup = InlineKeyboardMarkup()
         markup.add(InlineKeyboardButton("🗑", callback_data="delete_msg"))
 
-        bot.edit_message_text(hw_text, call.message.chat.id, call.message.message_id,
-                              parse_mode="HTML", reply_markup=markup)
+        # Отправляем частями (если домашки много — она не влезет в одно сообщение)
+        for i, chunk in enumerate(split_message(hw_text)):
+            if i == 0:
+                bot.edit_message_text(chunk, call.message.chat.id, call.message.message_id,
+                                      parse_mode="HTML", reply_markup=markup,
+                                      disable_web_page_preview=True)
+            else:
+                bot.send_message(call.message.chat.id, chunk, parse_mode="HTML",
+                                 reply_markup=markup, disable_web_page_preview=True)
+
+    except Exception as e:
+        bot.edit_message_text(f"Сайт недоступен. Ошибка: {e}",
+                              call.message.chat.id, call.message.message_id)
 
     except Exception as e:
         bot.edit_message_text(f"Сайт недоступен. Ошибка: {e}",
