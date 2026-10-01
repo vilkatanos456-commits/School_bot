@@ -527,72 +527,79 @@ def process(chat_id, reply_to, uid, name, mode, subject, task, media):
 
     # Словарь с твоим расписанием 8-Б
 
-    SCHEDULE = {
-        "0": ["Географія", "Біологія", "Геометрія", "Фінансова грамотність", "Фізика", "Українська література"],
-        "1": ["Фізика", "Алгебра", "Англійська мова", "Інформатика", "Українська мова", "Історія"],
-        "2": ["Алгебра", "Англійська мова", "Фіз. виховання", "Зарубіжна література", "Основи здоров'я", "Інформатика",
-              "Трудове навчання"],
-        "3": ["Фіз. виховання", "Історія", "Українська мова", "Українська література", "Географія", "Хімія",
-              "Англійська мова"],
-        "4": ["Англійська мова", "Українська мова", "Біологія", "Алгебра", "Фіз. виховання", "Мистецтво", "Хімія"]
-    }
+    # ===========================================================================
+    # Расписание и обработчики домашки (ВЫНЕСЕНО ИЗ PROCESS НАВЕРХ)
+    # ===========================================================================
+SCHEDULE = {
+    "0": ["Географія", "Біологія", "Геометрія", "Фінансова грамотність", "Фізика", "Українська література"],
+    "1": ["Фізика", "Алгебра", "Англійська мова", "Інформатика", "Українська мова", "Історія"],
+    "2": ["Алгебра", "Англійська мова", "Фіз. виховання", "Зарубіжна література", "Основи здоров'я", "Інформатика",
+          "Трудове навчання"],
+    "3": ["Фіз. виховання", "Історія", "Українська мова", "Українська література", "Географія", "Хімія",
+          "Англійська мова"],
+    "4": ["Англійська мова", "Українська мова", "Біологія", "Алгебра", "Фіз. виховання", "Мистецтво", "Хімія"],
+}
 
-    @bot.message_handler(commands=['hw'])
-    def hw_menu(message):
-        from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+@bot.message_handler(commands=['hw'])
+def hw_menu(message):
+    markup = InlineKeyboardMarkup()
+    markup.row(InlineKeyboardButton("ПН", callback_data="hw_0"),
+               InlineKeyboardButton("ВТ", callback_data="hw_1"),
+               InlineKeyboardButton("СР", callback_data="hw_2"))
+    markup.row(InlineKeyboardButton("ЧТ", callback_data="hw_3"),
+               InlineKeyboardButton("ПТ", callback_data="hw_4"))
+    markup.add(InlineKeyboardButton("🗑 Закрыть", callback_data="delete_msg"))
+    bot.send_message(message.chat.id, "На какой день собрать домашку?", reply_markup=markup)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("hw_"))
+def parse_smart_hw(call):
+    day_index = call.data.split("_")[1]
+    subjects_today = SCHEDULE[day_index]
+    bot.edit_message_text("Сканирую сайт школы... 🕵️‍♂️", call.message.chat.id, call.message.message_id)
+    try:
+        url = "https://sch3.edu.vn.ua/disted"
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        response = requests.post(url, data={'class': '24'}, headers=headers, timeout=10)
+        response.encoding = 'utf-8'
+        soup = BeautifulSoup(response.text, 'html.parser')
+        hw_text = "📚 <b>Домашка:</b>\n\n"
+        rows = soup.find_all('tr')
+        for row in rows:
+            cols = row.find_all('td')
+            if len(cols) >= 5:
+                lesson_date = cols[0].text.strip()
+                subject = cols[3].text.strip()
+                if subject in subjects_today:
+                    task = cols[-1].text.strip()
+                    hw_text += f"🔹 <b>{subject}</b> ({lesson_date})\n{task}\n\n"
+        if hw_text == "📚 <b>Домашка:</b>\n\n":
+            hw_text = "На этот день свежих заданий на сайте пока нет."
         markup = InlineKeyboardMarkup()
-        # Создаем кнопки с днями недели
-        markup.row(InlineKeyboardButton("ПН", callback_data="hw_0"),
-                   InlineKeyboardButton("ВТ", callback_data="hw_1"),
-                   InlineKeyboardButton("СР", callback_data="hw_2"))
-        markup.row(InlineKeyboardButton("ЧТ", callback_data="hw_3"),
-                   InlineKeyboardButton("ПТ", callback_data="hw_4"))
-        markup.add(InlineKeyboardButton("🗑 Закрыть", callback_data="delete_msg"))
+        markup.add(InlineKeyboardButton("🗑", callback_data="delete_msg"))
+        bot.edit_message_text(hw_text, call.message.chat.id, call.message.message_id,
+                              reply_markup=markup, parse_mode="HTML")
+    except Exception as e:
+        bot.edit_message_text(f"Сайт недоступен. Ошибка: {e}", call.message.chat.id, call.message.message_id)
 
-        bot.send_message(message.chat.id, "На какой день собрать домашку?", reply_markup=markup)
 
-    @bot.callback_query_handler(func=lambda call: call.data.startswith("hw_"))
-    def parse_smart_hw(call):
-        day_index = call.data.split("_")[1]
-        subjects_today = SCHEDULE[day_index]
+def dispatch(message, mode, subject, task, media):
+    """Если предмет неизвестен - показывает кнопки, иначе запускает обработку."""
+    uid = message.from_user.id
+    if subject is None:
+        pending[uid] = {"mode": mode, "task": task, "media": media, "reply_to": message.message_id}
+        bot.reply_to(message, "Выбери предмет:", reply_markup=subjects_keyboard())
+        return
+    process(message.chat.id, message.message_id, uid, message.from_user.first_name,
+            mode, subject, task, media)
 
-        bot.edit_message_text("Сканирую сайт школы... 🕵️‍♂️", call.message.chat.id, call.message.message_id)
 
-        try:
-            url = "https://sch3.edu.vn.ua/disted"
-            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-            response = requests.post(url, data={'class': '24'}, headers=headers, timeout=10)
-            response.encoding = 'utf-8'
-            soup = BeautifulSoup(response.text, 'html.parser')
-
-            hw_text = f"📚 **Домашка:**\n\n"
-
-            # Ищем все строки таблицы <tr>
-            rows = soup.find_all('tr')
-            for row in rows:
-                cols = row.find_all('td')
-                # Проверяем, что в строке есть ячейки с датой и предметом
-                if len(cols) >= 5:
-                    lesson_date = cols[0].text.strip()
-                    subject = cols[3].text.strip()
-
-                    # Если предмет совпадает с расписанием на выбранный день
-                    if subject in subjects_today:
-                        # Задание обычно лежит в последней ячейке строки
-                        task = cols[-1].text.strip()
-                        hw_text += f"🔹 **{subject}** ({lesson_date})\n{task}\n\n"
-
-            if hw_text == f"📚 **Домашка:**\n\n":
-                hw_text = "На этот день свежих заданий на сайте пока нет."
-
-            from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-            markup = InlineKeyboardMarkup()
-            markup.add(InlineKeyboardButton("🗑", callback_data="delete_msg"))
-
-            bot.edit_message_text(hw_text, call.message.chat.id, call.message.message_id, reply_markup=markup)
-
-        except Exception as e:
-            bot.edit_message_text(f"Сайт недоступен. Ошибка: {e}", call.message.chat.id, call.message.message_id)
+def process(chat_id, reply_to, uid, name, mode, subject, task, media):
+    if limit_reached(uid):
+        bot.send_message(chat_id, f"Дневной лимит ({DAILY_LIMIT} запросов) исчерпан. Приходи завтра!",
+                         reply_to_message_id=reply_to)
+        return
 
     status = bot.send_message(chat_id, "Ищу ответ в учебнике... ⏱️", reply_to_message_id=reply_to)
     bot.send_chat_action(chat_id, "typing")
@@ -648,7 +655,6 @@ def process(chat_id, reply_to, uid, name, mode, subject, task, media):
             bot.edit_message_text("Произошла ошибка. Попробуй ещё раз.", chat_id, status.message_id)
         except Exception:
             pass
-
 
 # ===========================================================================
 # Тесты (викторина опросами Telegram)
