@@ -34,10 +34,10 @@ def _split_env(name):
     return [x.strip() for x in re.split(r"[,\n;]+", raw) if x.strip()]
 
 
-TELEGRAM_TOKEN = os.environ.get("", "")
+TELEGRAM_TOKEN = os.environ.get("8349218039:AAFPm8nqWvWlStgv-OeGO-dl78J7r8psxg4", "")
 API_KEYS = _split_env("GEMINI_API_KEYS") or _split_env("GEMINI_API_KEY")
 MODELS = _split_env("GEMINI_MODELS") or ["gemini-3.5-flash-lite"]
-ALLOWED_IDS = {int(x) for x in _split_env("ALLOWED_IDS")}
+ALLOWED_IDS = {int(x) for x in _split_env("0")}
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "0") or 0)
 DAILY_LIMIT = int(os.environ.get("DAILY_LIMIT", "40"))
 TOP_PAGES = int(os.environ.get("TOP_PAGES", "2"))
@@ -1055,4 +1055,9 @@ if __name__ == "__main__":
 
     threading.Thread(target=preload_books, daemon=True).start()
     log.info("Бот запущен. Модели: %s | ключей Gemini: %d", ", ".join(MODELS), len(API_KEYS))
-    bot.infinity_polling(skip_pending=True)
+    while True:
+        try:
+            bot.infinity_polling(skip_pending=True)
+        except Exception:
+            log.exception("Polling упал, перезапуск через 10 сек")
+            time.sleep(10)
