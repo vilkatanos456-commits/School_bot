@@ -10,7 +10,13 @@ import threading
 import time
 from collections import Counter, defaultdict
 from bs4 import BeautifulSoup
-from datetime import date
+from datetime import datetime, timezone, timedelta
+
+try:
+    from zoneinfo import ZoneInfo
+    KYIV = ZoneInfo("Europe/Kyiv")
+except Exception:
+    KYIV = timezone(timedelta(hours=3))
 from difflib import get_close_matches
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -134,14 +140,17 @@ bot = telebot.TeleBot(TELEGRAM_TOKEN, threaded=True)
 
 @bot.callback_query_handler(func=lambda call: call.data == "delete_msg")
 def shredder(call):
+    chat_id = call.message.chat.id
     try:
-        # Удаляем ответ бота
-        bot.delete_message(call.message.chat.id, call.message.message_id)
-        # Удаляем твое сообщение с вопросом/фоткой (оно идет прямо перед ответом)
-        bot.delete_message(call.message.chat.id, call.message.message_id - 1)
+        bot.delete_message(chat_id, call.message.message_id)
     except Exception:
-        pass # Если не вышло удалить, бот просто проигнорирует ошибку и не крашнется
-        pass # Если не вышло удалить, бот просто проигнорирует ошибку и не крашнется
+        pass
+    reply = call.message.reply_to_message
+    if reply and reply.from_user and not reply.from_user.is_bot:
+        try:
+            bot.delete_message(chat_id, reply.message_id)
+        except Exception:
+            pass
 
 # ===========================================================================
 # Состояние пользователей
@@ -589,6 +598,17 @@ def hw_menu(message):
     markup.add(InlineKeyboardButton("🗑 Закрыть", callback_data="delete_msg"))
     bot.send_message(message.chat.id, "На какой день собрать домашку?", reply_markup=markup)
 
+@bot.message_handler(commands=["schedule"])
+def cmd_schedule(message):
+    if not gate(message, cooldown=False):
+        return
+    names = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница"]
+    text = "\n\n".join(
+        f"<b>{names[int(d)]}</b>\n" + "\n".join(f"{i}. {s}" for i, s in enumerate(lessons, 1))
+        for d, lessons in SCHEDULE.items()
+    )
+    bot.send_message(message.chat.id, text, parse_mode="HTML")
+
 
 from concurrent.futures import ThreadPoolExecutor
 
@@ -621,15 +641,6 @@ def fetch_task_text(url):
     except Exception:
         log.exception("Не удалось открыть %s", url)
         return ""
-
-from datetime import datetime, timezone, timedelta
-
-try:
-    from zoneinfo import ZoneInfo
-    KYIV = ZoneInfo("Europe/Kyiv")
-except Exception:
-    KYIV = timezone(timedelta(hours=3))  # запасной вариант
-
 
 def is_future(lesson_date):
     """True, если дата урока (дд.мм.гггг) позже сегодняшней по Киеву."""
@@ -727,7 +738,7 @@ def build_hw_text(day_index):
             hw_text += html.escape(text[:400]) + "\n"
         else:
             hw_text += "(текст не найден)\n"
-        hw_text += f'<a href="{task_link}">🔗</a>\n\n'
+        hw_text += f'<a href="{html.escape(task_link, quote=True)}">🔗</a>\n\n'
         items.append((subject, text))
     return hw_text, items
 
@@ -778,6 +789,11 @@ def on_solve(call):
     except Exception:
         bot.answer_callback_query(call.id, "Список устарел, открой /hw заново.", show_alert=True)
         return
+    now = time.time()
+    if now - last_request.get(uid, 0) < COOLDOWN_SECONDS:
+        bot.answer_callback_query(call.id, "Подожди пару секунд.")
+        return
+    last_request[uid] = now
 
     bot.answer_callback_query(call.id, "Решаю…")
     subject = SUBJECT_KEYS.get(subject_ua, "none")
