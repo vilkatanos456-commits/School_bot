@@ -96,10 +96,14 @@ LENGTH_INSTR = {
     "normal": "",
     "short": "Отвечай максимально коротко: не больше 5-6 предложений.",
     "detail": "Отвечай подробно и развёрнуто, по шагам.",
+    "quick": ("РЕЖИМ БЫСТРЫХ ОТВЕТОВ. Дай ТОЛЬКО итоговый ответ: число, слово или вариант. "
+              "Без приветствий и пояснений. Для задачи допустима одна строка с расчётом. "
+              "На сообщения не по учёбе отвечай одним словом."),
 }
 
 MODE_INSTR = {
-    "answer": "Дай готовый точный ответ, затем кратко поясни его суть.",
+        "answer": ("Дай готовый точный ответ. Без вводных фраз и без отдельного пояснения сути, "
+               "не пиши слово «Суть». Если нужны выкладки, дай их кратко по шагам."),
     "explain": (
         "Не ограничивайся ответом: объясни пошагово, как решать такое задание, "
         "какие правила и формулы используются и почему, чтобы ученик смог "
@@ -113,6 +117,12 @@ MODE_INSTR = {
         "Составь краткую структурированную шпаргалку для повторения по "
         "указанной теме: главные определения, правила, формулы, 1-2 примера. "
         "Без воды."
+    ),
+    "essay": ("Напиши школьное сочинение на заданную тему для ученика 8 класса: вступление, "
+              "2-3 абзаца основной части с аргументами и примерами, вывод. Объём около 200-250 слов, "
+              "если не указано иное. Простой живой язык школьника, без канцелярита. "
+              "Для украинской мови и литературы пиши по-украински. Только текст сочинения."
+
     ),
 }
 
@@ -144,11 +154,50 @@ last_request = {}                 # uid -> время последнего за�
 # ===========================================================================
 # Статистика и лимиты
 # ===========================================================================
+KV_URL = os.environ.get("UPSTASH_REDIS_REST_URL", "").rstrip("/")
+KV_TOKEN = os.environ.get("UPSTASH_REDIS_REST_TOKEN", "")
+_kv_skip_save = set()  # ключи, которые не удалось прочитать: их не перезаписываем, чтобы не стереть данные
+
+
+def kv_enabled():
+    return bool(KV_URL and KV_TOKEN)
+
+
+def _kv(cmd):
+    r = requests.post(KV_URL, headers={"Authorization": f"Bearer {KV_TOKEN}"}, json=cmd, timeout=8)
+    r.raise_for_status()
+    return r.json().get("result")
+
+
+def kv_load(key, default):
+    for attempt in range(3):
+        try:
+            raw = _kv(["GET", key])
+            return json.loads(raw) if raw else default
+        except Exception:
+            log.warning("Redis: не удалось прочитать %s (попытка %d из 3)", key, attempt + 1)
+            time.sleep(2)
+    _kv_skip_save.add(key)
+    log.error("Redis недоступен: %s не будет сохраняться до перезапуска бота", key)
+    return default
+
+
+def kv_save(key, value):
+    if key in _kv_skip_save:
+        return
+    try:
+        _kv(["SET", key, json.dumps(value, ensure_ascii=False)])
+    except Exception:
+        log.exception("Redis: не удалось сохранить %s", key)
+
+
 STATS_FILE = os.path.join(DATA_DIR, "stats.json")
 _stats_lock = threading.Lock()
 
 
 def _load_stats():
+    if kv_enabled():
+        return kv_load("hwbot:stats", {"users": {}})
     try:
         with open(STATS_FILE, encoding="utf-8") as f:
             return json.load(f)
@@ -157,25 +206,26 @@ def _load_stats():
 
 
 stats = _load_stats()
-
-
 def register_use(uid, name):
-    today = date.today().isoformat()
+    today = datetime.now(KYIV).date().isoformat()
     with _stats_lock:
         u = stats["users"].setdefault(str(uid), {"name": name, "total": 0, "days": {}})
         u["name"] = name
         u["total"] += 1
         u["days"][today] = u["days"].get(today, 0) + 1
-        try:
-            with open(STATS_FILE, "w", encoding="utf-8") as f:
-                json.dump(stats, f, ensure_ascii=False, indent=1)
-        except Exception:
-            log.exception("Не удалось сохранить статистику")
+        if kv_enabled():
+            kv_save("hwbot:stats", stats)
+        else:
+            try:
+                with open(STATS_FILE, "w", encoding="utf-8") as f:
+                    json.dump(stats, f, ensure_ascii=False, indent=1)
+            except Exception:
+                log.exception("Не удалось сохранить статистику")
 
 
 def used_today(uid):
     u = stats["users"].get(str(uid))
-    return u["days"].get(date.today().isoformat(), 0) if u else 0
+    return u["days"].get(datetime.now(KYIV).date().isoformat(), 0) if u else 0
 
 
 def limit_reached(uid):
@@ -324,7 +374,7 @@ def score_pages(pdf_path, task, use_numbers=True):
 def find_context(pdf_path, task):
     """Возвращает (текст страниц, номера страниц PDF)."""
     pages = load_pages(pdf_path)
-    best = sorted(i for _, i in score_pages(pdf_path, task)[:TOP_PAGES])
+    best = sorted(i for sc, i in score_pages(pdf_path, task)[:TOP_PAGES] if sc >= 10)
     chunks, used, total = [], [], 0
     for i in best:
         chunk = f"[Страница {i + 1}]\n{pages[i]}"
@@ -439,10 +489,13 @@ def history_text(uid):
 
 def build_prompt(mode, context, task, uid):
     hist = history_text(uid)
+    mode_text = MODE_INSTR[mode]
+    if settings[uid]["length"] == "quick" and mode == "answer":
+        mode_text = "Дай только итоговый ответ, без пояснений."
     return (
         f"Фрагменты учебника:\n{context or '(подходящих фрагментов не найдено)'}\n\n"
         + (f"Предыдущий диалог:\n{hist}\n\n" if hist else "")
-        + f"Твоя задача: {MODE_INSTR[mode]}\n\nСообщение ученика: {task}"
+        + f"Твоя задача: {mode_text}\n\nСообщение ученика: {task}"
     )
 
 
@@ -596,8 +649,46 @@ def next_school_day():
     return d.weekday()
 
 
+import uuid
+
+# Название предмета в расписании (укр.) -> ключ учебника в SUBJECTS.
+# Если предмета тут нет (англ., информатика, физкультура...), решаем без учебника.
+SUBJECT_KEYS = {
+    "Алгебра": "алгебра",
+    "Біологія": "биология",
+    "Географія": "география",
+    "Геометрія": "геометрия",
+    "Зарубіжна література": "зарубежка",
+    "Історія": "история",
+    "Мистецтво": "музыка",
+    "Українська література": "укрлит",
+    "Українська мова": "укрмов",
+    "Фізика": "физика",
+    "Хімія": "химия",
+}
+
+HW_CACHE = {}  # token -> [(предмет, текст задания), ...]; живёт в памяти, до перезапуска бота
+
+def hw_markup(items, delete_data="delete_msg"):
+    """Кнопки '✏️ Предмет' (решить задание) + кнопка удаления."""
+    markup = InlineKeyboardMarkup(row_width=2)
+    buttons = []
+    if items:
+        token = uuid.uuid4().hex[:8]
+        HW_CACHE[token] = items
+        while len(HW_CACHE) > 50:  # храним последние 50 списков
+            HW_CACHE.pop(next(iter(HW_CACHE)))
+        for i, (subject, text) in enumerate(items):
+            if text:
+                label = subject if len(subject) <= 18 else subject[:17] + "…"
+                buttons.append(InlineKeyboardButton(f"✏️ {label}", callback_data=f"solve:{token}:{i}"))
+    if buttons:
+        markup.add(*buttons)
+    markup.add(InlineKeyboardButton("🗑", callback_data=delete_data))
+    return markup
+
 def build_hw_text(day_index):
-    """Собирает HTML-текст домашки на день. Возвращает None, если заданий нет."""
+    """Возвращает (HTML-текст домашки, список [(предмет, текст)]). Если заданий нет: (None, [])."""
     subjects_today = SCHEDULE[str(day_index)]
 
     url = "https://sch3.edu.vn.ua/disted"
@@ -621,13 +712,14 @@ def build_hw_text(day_index):
                 latest_tasks[subject] = (lesson_date, task_link)
 
     if not latest_tasks:
-        return None
+        return None, []
 
     subs_list = [s for s in subjects_today if s in latest_tasks]
     with ThreadPoolExecutor(max_workers=6) as ex:
         texts = list(ex.map(lambda s: fetch_task_text(latest_tasks[s][1]), subs_list))
 
     hw_text = f"📚 <b>Домашка на {DAY_NAMES[int(day_index)]}:</b>\n\n"
+    items = []
     for subject, text in zip(subs_list, texts):
         lesson_date, task_link = latest_tasks[subject]
         hw_text += f"🔹 <b>{html.escape(subject)}</b> ({html.escape(lesson_date)})\n"
@@ -636,8 +728,8 @@ def build_hw_text(day_index):
         else:
             hw_text += "(текст не найден)\n"
         hw_text += f'<a href="{task_link}">🔗</a>\n\n'
-    return hw_text
-
+        items.append((subject, text))
+    return hw_text, items
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("hw_"))
 def parse_smart_hw(call):
@@ -654,24 +746,44 @@ def parse_smart_hw(call):
     bot.edit_message_text("Сканирую сайт школы... 🕵️‍♂️", chat_id, msg_id)
 
     try:
-        hw_text = build_hw_text(day_index)
+        hw_text, items = build_hw_text(day_index)
         if not hw_text:
             bot.edit_message_text("На этот день свежих заданий на сайте пока нет.", chat_id, msg_id)
             return
 
-        markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton("🗑", callback_data="delete_msg"))
-
-        for i, chunk in enumerate(split_message(hw_text)):
+        markup = hw_markup(items)
+        chunks = split_message(hw_text)
+        for i, chunk in enumerate(chunks):
+            m = markup if i == len(chunks) - 1 else None  # кнопки только под последней частью
             if i == 0:
                 bot.edit_message_text(chunk, chat_id, msg_id, parse_mode="HTML",
-                                      reply_markup=markup, disable_web_page_preview=True)
+                                      reply_markup=m, disable_web_page_preview=True)
             else:
                 bot.send_message(chat_id, chunk, parse_mode="HTML",
-                                 reply_markup=markup, disable_web_page_preview=True)
+                                 reply_markup=m, disable_web_page_preview=True)
     except Exception as e:
         log.exception("Ошибка в /hw")
         bot.edit_message_text(f"Сайт недоступен. Ошибка: {e}", chat_id, msg_id)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("solve:"))
+def on_solve(call):
+    """Кнопка '✏️ Предмет' под домашкой: отправляет задание на решение."""
+    uid = call.from_user.id
+    if ALLOWED_IDS and uid not in ALLOWED_IDS and uid != ADMIN_ID:
+        bot.answer_callback_query(call.id, "Нет доступа.", show_alert=True)
+        return
+    try:
+        _, token, idx = call.data.split(":")
+        subject_ua, task_text = HW_CACHE[token][int(idx)]
+    except Exception:
+        bot.answer_callback_query(call.id, "Список устарел, открой /hw заново.", show_alert=True)
+        return
+
+    bot.answer_callback_query(call.id, "Решаю…")
+    subject = SUBJECT_KEYS.get(subject_ua, "none")
+    task = f"{subject_ua}. Домашнее задание: {task_text[:1500]}"
+    process(call.message.chat.id, call.message.message_id, uid,
+            call.from_user.first_name, "answer", subject, task, [])
 
 
 # ===========================================================================
@@ -683,6 +795,8 @@ _subs_lock = threading.Lock()
 
 
 def _load_subs():
+    if kv_enabled():
+        return {int(x) for x in kv_load("hwbot:subs", [])}
     try:
         with open(SUBS_FILE, encoding="utf-8") as f:
             return {int(x) for x in json.load(f)}
@@ -694,6 +808,9 @@ subs = _load_subs()
 
 
 def _save_subs():
+    if kv_enabled():
+        kv_save("hwbot:subs", sorted(subs))
+        return
     try:
         with open(SUBS_FILE, "w", encoding="utf-8") as f:
             json.dump(sorted(subs), f)
@@ -740,26 +857,48 @@ def cmd_unsubscribe(message):
     bot.reply_to(message, "Рассылка отключена.")
 
 
+RETRY_ATTEMPTS = 4          # сколько раз пробуем достучаться до сайта школы
+RETRY_DELAY = 10 * 60       # пауза между попытками, секунд
+
+
 def send_daily():
     day_index = next_school_day()
-    try:
-        hw_text = build_hw_text(day_index)
-    except Exception:
-        log.exception("Рассылка: не удалось собрать домашку")
+
+    hw_text, items = None, []
+    for attempt in range(1, RETRY_ATTEMPTS + 1):
+        try:
+            hw_text, items = build_hw_text(day_index)
+            break                                   # получилось
+        except Exception:
+            log.exception("Рассылка: сайт недоступен (попытка %d из %d)", attempt, RETRY_ATTEMPTS)
+            if attempt < RETRY_ATTEMPTS:
+                time.sleep(RETRY_DELAY)
+    else:
+        # все попытки не удались: сообщаем, что домашку получить не вышло
+        for chat_id in broadcast_targets():
+            try:
+                bot.send_message(chat_id, "⚠️ Сайт школы сейчас недоступен, домашку получить не удалось. "
+                                          "Попробуй позже командой /hw.")
+            except Exception:
+                log.exception("Рассылка: не удалось отправить уведомление в чат %s", chat_id)
         return
+
     if not hw_text:
         log.info("Рассылка: заданий на день %s нет", day_index)
         return
 
-    markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("🗑", callback_data="del_one"))
+    chunks = split_message(hw_text)
     for chat_id in broadcast_targets():
         try:
-            for chunk in split_message(hw_text):
+            markup = hw_markup(items, "del_one")
+            for i, chunk in enumerate(chunks):
                 bot.send_message(chat_id, chunk, parse_mode="HTML",
-                                 reply_markup=markup, disable_web_page_preview=True)
+                                 reply_markup=markup if i == len(chunks) - 1 else None,
+                                 disable_web_page_preview=True)
         except Exception:
             log.exception("Рассылка: не удалось отправить в чат %s", chat_id)
+
+
 
 
 def broadcast_loop():
@@ -797,14 +936,9 @@ def on_subject_pick(call):
 
 
 def dispatch(message, mode, subject, task, media):
-    """Если предмет неизвестен - показывает кнопки, иначе запускает обработку."""
     uid = message.from_user.id
-    if subject is None:
-        pending[uid] = {"mode": mode, "task": task, "media": media, "reply_to": message.message_id}
-        bot.reply_to(message, "Выбери предмет:", reply_markup=subjects_keyboard())
-        return
     process(message.chat.id, message.message_id, uid, message.from_user.first_name,
-            mode, subject, task, media)
+            mode, subject or "auto", task, media)
 
 
 def process(chat_id, reply_to, uid, name, mode, subject, task, media):
@@ -828,7 +962,9 @@ def process(chat_id, reply_to, uid, name, mode, subject, task, media):
 
         auto_note = ""
         general = False  # True = отвечаем без учебника
-        if subject == "auto":
+        if subject == "none":
+            subject, general = None, True
+        elif subject == "auto":
             subject = auto_detect(task)
             if subject:
                 auto_note = f"📚 Предмет: {subject}\n\n"
@@ -861,7 +997,8 @@ def process(chat_id, reply_to, uid, name, mode, subject, task, media):
         history[uid].append((task, answer))
         history[uid] = history[uid][-HISTORY_TURNS:]
 
-        footer = f"\n\n📖 Использованы страницы PDF: {', '.join(map(str, pages))}" if pages else ""
+        quick = settings[uid]["length"] == "quick"
+        footer = f"\n\n📖 Использованы страницы PDF: {', '.join(map(str, pages))}" if pages and not quick else ""
         send_answer(chat_id, status, auto_note + answer + footer)
 
     except Exception:
@@ -946,6 +1083,9 @@ HELP_TEXT = (
     "Пиши: <code>физика задача 3.5</code> — или просто текст задания (предмет запомнится).\n"
     "Можно прислать <b>фото</b> задания или <b>голосовое</b> сообщение.\n\n"
     "<b>Команды</b>\n"
+    "/hw — домашка с сайта школы (есть «На завтра»)\n"
+    "/subscribe, /unsubscribe — рассылка домашки в 16:00\n"
+    "/schedule — расписание уроков\n"
     "/subjects — список предметов\n"
     "/subject физика — выбрать текущий предмет\n"
     "/explain [предмет] задание — объяснить, КАК решать\n"
@@ -953,6 +1093,8 @@ HELP_TEXT = (
     "/summary [предмет] тема — шпаргалка для повторения\n"
     "/quiz [предмет] [тема] — тест из 5 вопросов\n"
     "/short, /detail, /normal — длина ответов\n"
+    "/essay [предмет] тема — написать сочинение\n"
+    "/quick — режим только коротких ответов (выйти: /normal)\n"
     "/reset — очистить память диалога\n"
     "/stats — твоя статистика\n"
     "/id — твой Telegram ID"
@@ -1015,6 +1157,11 @@ def cmd_normal(message):
     _set_length(message, "normal", "Режим: обычные ответы.")
 
 
+@bot.message_handler(commands=["quick"])
+def cmd_quick(message):
+    _set_length(message, "quick", "Режим: только короткие ответы. Выйти: /normal")
+
+
 @bot.message_handler(commands=["reset"])
 def cmd_reset(message):
     if gate(message, cooldown=False):
@@ -1032,7 +1179,7 @@ def cmd_stats(message):
     if uid == ADMIN_ID:
         rows = sorted(stats["users"].items(), key=lambda kv: kv[1]["total"], reverse=True)[:15]
         text += "\n\nВсе пользователи:\n" + "\n".join(
-            f"{v['name']} ({k}): {v['total']} всего, {v['days'].get(date.today().isoformat(), 0)} сегодня"
+            f"{v['name']} ({k}): {v['total']} всего, {v['days'].get(datetime.now(KYIV).date().isoformat(), 0)} сегодня"
             for k, v in rows
         )
     bot.reply_to(message, text)
@@ -1055,6 +1202,7 @@ def _mode_command(mode, usage):
 bot.message_handler(commands=["explain"])(_mode_command("explain", "Пример: /explain физика задача 3.5"))
 bot.message_handler(commands=["check"])(_mode_command("check", "Пример: /check алгебра моё решение: x = 5... (или отправь фото с подписью /check)"))
 bot.message_handler(commands=["summary"])(_mode_command("summary", "Пример: /summary история Первая мировая война"))
+bot.message_handler(commands=["essay"])(_mode_command("essay", "Пример: /essay укрлит образ Тараса Бульбы, 250 слов"))
 
 
 @bot.message_handler(commands=["quiz"])
@@ -1164,6 +1312,9 @@ if __name__ == "__main__":
     try:
         bot.set_my_commands([
             tg.BotCommand("help", "Как пользоваться"),
+            tg.BotCommand("schedule", "Расписание уроков"),
+            tg.BotCommand("subscribe", "Домашка каждый день в 16:00"),
+            tg.BotCommand("unsubscribe", "Отключить рассылку"),
             tg.BotCommand("subjects", "Список предметов"),
             tg.BotCommand("subject", "Выбрать предмет"),
             tg.BotCommand("explain", "Объяснить, как решать"),
@@ -1175,11 +1326,14 @@ if __name__ == "__main__":
             tg.BotCommand("reset", "Очистить память диалога"),
             tg.BotCommand("stats", "Статистика"),
             tg.BotCommand("hw", "Домашка на день"),
+            tg.BotCommand("quick", "Только короткие ответы"),
+            tg.BotCommand("essay", "Написать сочинение"),
         ])
     except Exception:
         log.warning("Не удалось установить меню команд")
 
     threading.Thread(target=preload_books, daemon=True).start()
+    threading.Thread(target=broadcast_loop, daemon=True).start()
     log.info("Бот запущен. Модели: %s | ключей Gemini: %d", ", ".join(MODELS), len(API_KEYS))
     while True:
         try:
