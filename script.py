@@ -346,7 +346,7 @@ def auto_detect(task):
         s = sum(sc for sc, _ in score_pages(path, task, use_numbers=False)[:3])
         if s > best_score:
             best, best_score = key, s
-    return best
+    return best if best_score >= 10 else None
 
 
 def preload_books():
@@ -527,6 +527,7 @@ SCHEDULE = {
 @bot.message_handler(commands=['hw'])
 def hw_menu(message):
     markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("📅 На завтра", callback_data="hw_auto"))
     markup.row(InlineKeyboardButton("ПН", callback_data="hw_0"),
                InlineKeyboardButton("ВТ", callback_data="hw_1"),
                InlineKeyboardButton("СР", callback_data="hw_2"))
@@ -584,12 +585,64 @@ def is_future(lesson_date):
         return d > datetime.now(KYIV).date()
     except ValueError:
         return False  # если дату не разобрать, задание не скрываем
+DAY_NAMES = ["понедельник", "вторник", "среду", "четверг", "пятницу"]
+
+
+def next_school_day():
+    """Индекс следующего учебного дня (0=ПН ... 4=ПТ) по Киеву. Выходные пропускает."""
+    d = datetime.now(KYIV).date() + timedelta(days=1)
+    while d.weekday() >= 5:
+        d += timedelta(days=1)
+    return d.weekday()
+
+
+def build_hw_text(day_index):
+    """Собирает HTML-текст домашки на день. Возвращает None, если заданий нет."""
+    subjects_today = SCHEDULE[str(day_index)]
+
+    url = "https://sch3.edu.vn.ua/disted"
+    response = requests.post(url, data={'class': '24'}, headers=HEADERS, timeout=10)
+    response.encoding = 'utf-8'
+    soup = BeautifulSoup(response.text, 'html.parser')
+
+    latest_tasks = {}
+    for row in soup.find_all('tr'):
+        cols = row.find_all('td')
+        if len(cols) >= 5:
+            lesson_date = cols[0].text.strip()
+            subject = cols[3].text.strip()
+            if subject in subjects_today and subject not in latest_tasks and not is_future(lesson_date):
+                a_tag = row.find('a')
+                if a_tag and 'href' in a_tag.attrs:
+                    href = a_tag['href']
+                    task_link = href if href.startswith("http") else "https://sch3.edu.vn.ua" + href
+                else:
+                    task_link = "https://sch3.edu.vn.ua/disted"
+                latest_tasks[subject] = (lesson_date, task_link)
+
+    if not latest_tasks:
+        return None
+
+    subs_list = [s for s in subjects_today if s in latest_tasks]
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        texts = list(ex.map(lambda s: fetch_task_text(latest_tasks[s][1]), subs_list))
+
+    hw_text = f"📚 <b>Домашка на {DAY_NAMES[int(day_index)]}:</b>\n\n"
+    for subject, text in zip(subs_list, texts):
+        lesson_date, task_link = latest_tasks[subject]
+        hw_text += f"🔹 <b>{html.escape(subject)}</b> ({html.escape(lesson_date)})\n"
+        if text:
+            hw_text += html.escape(text[:400]) + "\n"
+        else:
+            hw_text += "(текст не найден)\n"
+        hw_text += f'<a href="{task_link}">🔗</a>\n\n'
+    return hw_text
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("hw_"))
 def parse_smart_hw(call):
-    day_index = call.data.split("_")[1]
-    subjects_today = SCHEDULE[day_index]
+    key = call.data.split("_")[1]
+    day_index = str(next_school_day()) if key == "auto" else key
     chat_id = call.message.chat.id
     msg_id = call.message.message_id
 
@@ -601,60 +654,128 @@ def parse_smart_hw(call):
     bot.edit_message_text("Сканирую сайт школы... 🕵️‍♂️", chat_id, msg_id)
 
     try:
-        url = "https://sch3.edu.vn.ua/disted"
-        response = requests.post(url, data={'class': '24'}, headers=HEADERS, timeout=10)
-        response.encoding = 'utf-8'
-        soup = BeautifulSoup(response.text, 'html.parser')
-
-        latest_tasks = {}
-        for row in soup.find_all('tr'):
-            cols = row.find_all('td')
-            if len(cols) >= 5:
-                lesson_date = cols[0].text.strip()
-                subject = cols[3].text.strip()
-                if subject in subjects_today and subject not in latest_tasks and not is_future(lesson_date):
-                    a_tag = row.find('a')
-                    if a_tag and 'href' in a_tag.attrs:
-                        href = a_tag['href']
-                        task_link = href if href.startswith("http") else "https://sch3.edu.vn.ua" + href
-                    else:
-                        task_link = "https://sch3.edu.vn.ua/disted"
-                    latest_tasks[subject] = (lesson_date, task_link)
-
-        if not latest_tasks:
+        hw_text = build_hw_text(day_index)
+        if not hw_text:
             bot.edit_message_text("На этот день свежих заданий на сайте пока нет.", chat_id, msg_id)
             return
-
-        # Страницы заданий грузим параллельно
-        subs = [s for s in subjects_today if s in latest_tasks]
-        with ThreadPoolExecutor(max_workers=6) as ex:
-            texts = list(ex.map(lambda s: fetch_task_text(latest_tasks[s][1]), subs))
-
-        hw_text = "📚 <b>Актуальная домашка:</b>\n\n"
-        for subject, text in zip(subs, texts):
-            lesson_date, task_link = latest_tasks[subject]
-            hw_text += f"🔹 <b>{html.escape(subject)}</b> ({html.escape(lesson_date)})\n"
-            if text:
-                hw_text += html.escape(text[:400]) + "\n"
-            else:
-                hw_text += "(текст не найден)\n"
-            hw_text += f'<a href="{task_link}">🔗</a>\n\n'
 
         markup = InlineKeyboardMarkup()
         markup.add(InlineKeyboardButton("🗑", callback_data="delete_msg"))
 
         for i, chunk in enumerate(split_message(hw_text)):
             if i == 0:
-                bot.edit_message_text(chunk, chat_id, msg_id,
-                                      parse_mode="HTML", reply_markup=markup,
-                                      disable_web_page_preview=True)
+                bot.edit_message_text(chunk, chat_id, msg_id, parse_mode="HTML",
+                                      reply_markup=markup, disable_web_page_preview=True)
             else:
                 bot.send_message(chat_id, chunk, parse_mode="HTML",
                                  reply_markup=markup, disable_web_page_preview=True)
-
     except Exception as e:
         log.exception("Ошибка в /hw")
         bot.edit_message_text(f"Сайт недоступен. Ошибка: {e}", chat_id, msg_id)
+
+
+# ===========================================================================
+# Ежедневная рассылка домашки
+# ===========================================================================
+SEND_HOUR, SEND_MINUTE = 16, 0          # время рассылки по Киеву
+SUBS_FILE = os.path.join(DATA_DIR, "subs.json")
+_subs_lock = threading.Lock()
+
+
+def _load_subs():
+    try:
+        with open(SUBS_FILE, encoding="utf-8") as f:
+            return {int(x) for x in json.load(f)}
+    except Exception:
+        return set()
+
+
+subs = _load_subs()
+
+
+def _save_subs():
+    try:
+        with open(SUBS_FILE, "w", encoding="utf-8") as f:
+            json.dump(sorted(subs), f)
+    except Exception:
+        log.exception("Не удалось сохранить подписчиков")
+
+
+def broadcast_targets():
+    """Чаты для рассылки: переменная BROADCAST_IDS + подписавшиеся через /subscribe.
+    Если никого нет - шлём админу."""
+    ids = {int(x) for x in _split_env("BROADCAST_IDS")} | set(subs)
+    if not ids and ADMIN_ID:
+        ids = {ADMIN_ID}
+    return ids
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "del_one")
+def delete_one(call):
+    """Удаляет только само сообщение (для рассылки, где предыдущее сообщение чужое)."""
+    try:
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+    except Exception:
+        pass
+
+
+@bot.message_handler(commands=["subscribe"])
+def cmd_subscribe(message):
+    if not gate(message, cooldown=False):
+        return
+    with _subs_lock:
+        subs.add(message.chat.id)
+        _save_subs()
+    bot.reply_to(message, f"Готово! Каждый учебный день в {SEND_HOUR}:{SEND_MINUTE:02d} "
+                          "буду присылать домашку на следующий день. Отписаться: /unsubscribe")
+
+
+@bot.message_handler(commands=["unsubscribe"])
+def cmd_unsubscribe(message):
+    if not gate(message, cooldown=False):
+        return
+    with _subs_lock:
+        subs.discard(message.chat.id)
+        _save_subs()
+    bot.reply_to(message, "Рассылка отключена.")
+
+
+def send_daily():
+    day_index = next_school_day()
+    try:
+        hw_text = build_hw_text(day_index)
+    except Exception:
+        log.exception("Рассылка: не удалось собрать домашку")
+        return
+    if not hw_text:
+        log.info("Рассылка: заданий на день %s нет", day_index)
+        return
+
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("🗑", callback_data="del_one"))
+    for chat_id in broadcast_targets():
+        try:
+            for chunk in split_message(hw_text):
+                bot.send_message(chat_id, chunk, parse_mode="HTML",
+                                 reply_markup=markup, disable_web_page_preview=True)
+        except Exception:
+            log.exception("Рассылка: не удалось отправить в чат %s", chat_id)
+
+
+def broadcast_loop():
+    last_sent = None
+    start = SEND_HOUR * 60 + SEND_MINUTE
+    while True:
+        try:
+            now = datetime.now(KYIV)
+            minutes = now.hour * 60 + now.minute
+            # окно 10 минут: если бот перезапустится позже, старую рассылку не шлём
+            if now.weekday() < 5 and start <= minutes < start + 10 and last_sent != now.date():
+                last_sent = now.date()
+                send_daily()
+        except Exception:
+            log.exception("Ошибка планировщика")
+        time.sleep(20)
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("subj:"))
@@ -706,25 +827,27 @@ def process(chat_id, reply_to, uid, name, mode, subject, task, media):
                 return
 
         auto_note = ""
+        general = False  # True = отвечаем без учебника
         if subject == "auto":
             subject = auto_detect(task)
-            if not subject:
-                bot.edit_message_text("Не смог определить предмет. Напиши его явно, например: физика " + task[:40],
+            if subject:
+                auto_note = f"📚 Предмет: {subject}\n\n"
+            else:
+                general = True
+
+        if general:
+            context, pages = "", []
+        else:
+            path = book_path(subject)
+            if not path:
+                bot.edit_message_text(f"Файл учебника «{SUBJECTS[subject]}» не найден в папке «книги».",
                                       chat_id, status.message_id)
                 return
-            auto_note = f"📚 Предмет: {subject}\n\n"
-
-        path = book_path(subject)
-        if not path:
-            bot.edit_message_text(f"Файл учебника «{SUBJECTS[subject]}» не найден в папке «книги».",
-                                  chat_id, status.message_id)
-            return
-        if not any(load_pages(path)):
-            bot.edit_message_text("Не удалось извлечь текст из PDF (возможно, это скан без текстового слоя).",
-                                  chat_id, status.message_id)
-            return
-
-        context, pages = find_context(path, task)
+            if not any(load_pages(path)):
+                bot.edit_message_text("Не удалось извлечь текст из PDF (возможно, это скан без текстового слоя).",
+                                      chat_id, status.message_id)
+                return
+            context, pages = find_context(path, task)
         prompt = build_prompt(mode, context, task, uid)
         answer = call_gemini([prompt, *media], system_instruction=build_system(uid))
         if not answer:
@@ -733,7 +856,8 @@ def process(chat_id, reply_to, uid, name, mode, subject, task, media):
             return
 
         register_use(uid, name)
-        settings[uid]["subject"] = subject
+        if subject:
+            settings[uid]["subject"] = subject
         history[uid].append((task, answer))
         history[uid] = history[uid][-HISTORY_TURNS:]
 
