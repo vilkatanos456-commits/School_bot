@@ -1,3 +1,4 @@
+import uuid
 import hashlib
 import html
 import requests
@@ -19,6 +20,7 @@ except Exception:
     KYIV = timezone(timedelta(hours=3))
 from difflib import get_close_matches
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from io import BytesIO
 
 import telebot
 from telebot import types as tg
@@ -137,6 +139,27 @@ logging.getLogger("pypdf").setLevel(logging.ERROR)
 log = logging.getLogger("homework_bot")
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN, threaded=True)
+try:
+    bot.set_my_commands([
+        tg.BotCommand("hw", "Домашка с сайта школы"),
+        tg.BotCommand("quiz", "Тест по теме"),
+        tg.BotCommand("explain", "Объяснить, как решать"),
+        tg.BotCommand("check", "Проверить моё решение"),
+        tg.BotCommand("summary", "Шпаргалка по теме"),
+        tg.BotCommand("essay", "Написать сочинение"),
+        tg.BotCommand("schedule", "Расписание уроков"),
+        tg.BotCommand("subject", "Выбрать предмет"),
+        tg.BotCommand("reset", "Очистить память диалога"),
+        tg.BotCommand("stats", "Моя статистика"),
+        tg.BotCommand("top", "Рейтинг класса"),
+        tg.BotCommand("cards", "Карточки для запоминания"),
+        tg.BotCommand("proofread", "Проверить орфографию"),
+        tg.BotCommand("remind", "Напоминание о контрольной"),
+        tg.BotCommand("pomodoro", "Таймер учёбы"),
+        tg.BotCommand("help", "Справка"),
+    ])
+except Exception:
+    log.warning("Не удалось установить меню команд")
 
 @bot.callback_query_handler(func=lambda call: call.data == "delete_msg")
 def shredder(call):
@@ -151,6 +174,74 @@ def shredder(call):
             bot.delete_message(chat_id, reply.message_id)
         except Exception:
             pass
+@bot.callback_query_handler(func=lambda call: call.data.startswith("fb:"))
+def on_feedback(call):
+    """Кнопки 👍/👎 под ответом."""
+    _, verdict, token = call.data.split(":")
+    data = FB_CACHE.pop(token, None)
+    if verdict == "bad":
+        FB_LOG.append(datetime.now(KYIV).date().isoformat())
+    try:
+        bot.answer_callback_query(call.id, "Спасибо за оценку!" if verdict == "ok" else "Учту, спасибо.")
+    except Exception:
+        pass
+    if verdict == "bad" and data and ADMIN_ID:
+        try:
+            bot.send_message(ADMIN_ID,
+                             f"👎 Плохой ответ (uid {data['uid']})\n\n"
+                             f"Вопрос:\n{data['task']}\n\nОтвет:\n{data['answer'][:1500]}")
+        except Exception:
+            log.exception("Не удалось переслать отзыв админу")
+    try:
+        kb = InlineKeyboardMarkup()
+        kb.add(InlineKeyboardButton("🗑", callback_data="delete_msg"))
+        bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=kb)
+    except Exception:
+        pass
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("similar:"))
+def on_similar(call):
+    """Кнопка 🔁: придумать похожую задачу на то же правило."""
+    uid = call.from_user.id
+    if ALLOWED_IDS and uid not in ALLOWED_IDS and uid != ADMIN_ID:
+        bot.answer_callback_query(call.id, "Нет доступа.", show_alert=True)
+        return
+    if limit_reached(uid):
+        bot.answer_callback_query(call.id, "Дневной лимит исчерпан.", show_alert=True)
+        return
+    data = SIM_CACHE.get(call.data.split(":", 1)[1])
+    if not data:
+        bot.answer_callback_query(call.id, "Кнопка устарела, спроси заново.")
+        return
+    subject, task = data
+    bot.answer_callback_query(call.id, "Придумываю...")
+    status = bot.send_message(call.message.chat.id, "Придумываю похожую задачу... ⏱️")
+    bot.send_chat_action(call.message.chat.id, "typing")
+    try:
+        path = book_path(subject)
+        context, _ = find_context(path, task) if path else ("", [])
+        prompt = (
+            f"Фрагменты учебника:\n{context or '(нет)'}\n\n"
+            f"Задача ученика:\n{task}\n\n"
+            "Придумай ПОХОЖУЮ задачу на то же правило, но с другими числами и условием. "
+            "Сначала приведи условие новой задачи, затем строку «РЕШЕНИЕ:» и краткое решение с ответом."
+        )
+        answer = call_gemini([prompt], system_instruction=SYSTEM_BASE, temperature=0.7)
+        if not answer:
+            bot.edit_message_text("ИИ сейчас недоступен, попробуй позже.",
+                                  call.message.chat.id, status.message_id)
+            return
+        register_use(uid, call.from_user.first_name)
+        send_answer(call.message.chat.id, status, answer,
+                    uid=uid, task=answer[:500], subject=subject)
+    except Exception:
+        log.exception("Ошибка похожей задачи")
+        try:
+            bot.edit_message_text("Произошла ошибка, попробуй ещё раз.",
+                                  call.message.chat.id, status.message_id)
+        except Exception:
+            pass
 
 # ===========================================================================
 # Состояние пользователей
@@ -158,7 +249,20 @@ def shredder(call):
 settings = defaultdict(lambda: {"length": "normal", "subject": None})
 history = defaultdict(list)       # uid -> [(вопрос, ответ), ...]
 pending = {}                      # uid -> отложенный запрос (ждём выбор предмета)
+ANSWER_CACHE = {}   # готовые ответы: одинаковые вопросы не тратят лимит и квоту Gemini
+FB_CACHE = {}       # отзывы по кнопкам 👍/👎
+SIM_CACHE = {}      # для кнопки «🔁 Похожая задача»
+
+
+def _trim(d, limit=300):
+    while len(d) > limit:
+        d.pop(next(iter(d)))
 last_request = {}                 # uid -> время последнего запроса
+START_TIME = time.time()
+FB_LOG = []            # даты всех 👎 — для ежедневного отчёта
+REMINDS_MEM = []       # напоминания, если Redis не подключён
+POMODORO = {}          # uid -> таймеры помидорки
+HW_DONE = {}           # token -> {номера выполненных заданий}
 
 # ===========================================================================
 # Статистика и лимиты
@@ -278,11 +382,20 @@ def split_message(text, limit=TG_LIMIT):
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 
-def send_answer(chat_id, status_msg, text):
+def send_answer(chat_id, status_msg, text, uid=None, task=None, subject=None):
     """Сначала пробует HTML; если Telegram не принял разметку - шлёт чистым текстом."""
 
-    # Создаем кнопку-шредер
     markup = InlineKeyboardMarkup()
+    if uid:
+        token = uuid.uuid4().hex[:8]
+        FB_CACHE[token] = {"uid": uid, "task": (task or "")[:500], "answer": text[:2000]}
+        _trim(FB_CACHE, 100)
+        if subject and task:
+            SIM_CACHE[token] = (subject, task[:500])
+            _trim(SIM_CACHE, 100)
+            markup.add(InlineKeyboardButton("🔁 Похожая задача", callback_data=f"similar:{token}"))
+        markup.row(InlineKeyboardButton("👍", callback_data=f"fb:ok:{token}"),
+                   InlineKeyboardButton("👎", callback_data=f"fb:bad:{token}"))
     markup.add(InlineKeyboardButton("🗑", callback_data="delete_msg"))
 
     for n, chunk in enumerate(split_message(sanitize_html(text))):
@@ -585,7 +698,12 @@ SCHEDULE = {
     "4": ["Англійська мова", "Українська мова", "Біологія", "Алгебра", "Фіз. виховання", "Мистецтво", "Хімія"],
 }
 
-
+# Классы школы: имя -> ID на сайте sch3.edu.vn.ua
+CLASSES = {
+"8-Б": "24",
+}
+DEFAULT_CLASS = "8-Б"
+SCHEDULES = {"8-Б": SCHEDULE}   # у классов без расписания бот покажет все свежие задания с сайта
 @bot.message_handler(commands=['hw'])
 def hw_menu(message):
     markup = InlineKeyboardMarkup()
@@ -659,9 +777,6 @@ def next_school_day():
         d += timedelta(days=1)
     return d.weekday()
 
-
-import uuid
-
 # Название предмета в расписании (укр.) -> ключ учебника в SUBJECTS.
 # Если предмета тут нет (англ., информатика, физкультура...), решаем без учебника.
 SUBJECT_KEYS = {
@@ -680,30 +795,38 @@ SUBJECT_KEYS = {
 
 HW_CACHE = {}  # token -> [(предмет, текст задания), ...]; живёт в памяти, до перезапуска бота
 
-def hw_markup(items, delete_data="delete_msg"):
-    """Кнопки '✏️ Предмет' (решить задание) + кнопка удаления."""
-    markup = InlineKeyboardMarkup(row_width=2)
-    buttons = []
-    if items:
-        token = uuid.uuid4().hex[:8]
-        HW_CACHE[token] = items
-        while len(HW_CACHE) > 50:  # храним последние 50 списков
-            HW_CACHE.pop(next(iter(HW_CACHE)))
-        for i, (subject, text) in enumerate(items):
-            if text:
-                label = subject if len(subject) <= 18 else subject[:17] + "…"
-                buttons.append(InlineKeyboardButton(f"✏️ {label}", callback_data=f"solve:{token}:{i}"))
-    if buttons:
-        markup.add(*buttons)
+def _hw_kb(token, items, delete_data="delete_msg"):
+    done = HW_DONE.setdefault(token, set())
+    markup = InlineKeyboardMarkup()
+    for i, (subject, text) in enumerate(items):
+        if text:
+            label = subject if len(subject) <= 18 else subject[:17] + "…"
+            markup.row(
+                InlineKeyboardButton(f"✏️ {label}", callback_data=f"solve:{token}:{i}"),
+                InlineKeyboardButton("☑️" if i in done else "✅", callback_data=f"hwdone:{token}:{i}"),
+            )
     markup.add(InlineKeyboardButton("🗑", callback_data=delete_data))
     return markup
 
-def build_hw_text(day_index):
+
+def hw_markup(items, delete_data="delete_msg"):
+    """Кнопки '✏️ Предмет' (решить), '✅' (выполнено) и кнопка удаления."""
+    token = uuid.uuid4().hex[:8]
+    HW_CACHE[token] = items
+    while len(HW_CACHE) > 50:  # храним последние 50 списков
+        HW_CACHE.pop(next(iter(HW_CACHE)))
+    return _hw_kb(token, items, delete_data)
+
+def build_hw_text(day_index, class_name=None):
     """Возвращает (HTML-текст домашки, список [(предмет, текст)]). Если заданий нет: (None, [])."""
-    subjects_today = SCHEDULE[str(day_index)]
+    class_name = class_name or DEFAULT_CLASS
+    class_id = CLASSES.get(class_name)
+    if not class_id:
+        return None, []
+    subjects_today = SCHEDULES.get(class_name, {}).get(str(day_index))
 
     url = "https://sch3.edu.vn.ua/disted"
-    response = requests.post(url, data={'class': '24'}, headers=HEADERS, timeout=10)
+    response = requests.post(url, data={'class': class_id}, headers=HEADERS, timeout=10)
     response.encoding = 'utf-8'
     soup = BeautifulSoup(response.text, 'html.parser')
 
@@ -713,7 +836,8 @@ def build_hw_text(day_index):
         if len(cols) >= 5:
             lesson_date = cols[0].text.strip()
             subject = cols[3].text.strip()
-            if subject in subjects_today and subject not in latest_tasks and not is_future(lesson_date):
+            if (subjects_today is None or subject in subjects_today) and subject not in latest_tasks and not is_future(
+                    lesson_date):
                 a_tag = row.find('a')
                 if a_tag and 'href' in a_tag.attrs:
                     href = a_tag['href']
@@ -729,7 +853,7 @@ def build_hw_text(day_index):
     with ThreadPoolExecutor(max_workers=6) as ex:
         texts = list(ex.map(lambda s: fetch_task_text(latest_tasks[s][1]), subs_list))
 
-    hw_text = f"📚 <b>Домашка на {DAY_NAMES[int(day_index)]}:</b>\n\n"
+    hw_text = f"📚 <b>Домашка {html.escape(class_name)} на {DAY_NAMES[int(day_index)]}:</b>\n\n"
     items = []
     for subject, text in zip(subs_list, texts):
         lesson_date, task_link = latest_tasks[subject]
@@ -757,7 +881,7 @@ def parse_smart_hw(call):
     bot.edit_message_text("Сканирую сайт школы... 🕵️‍♂️", chat_id, msg_id)
 
     try:
-        hw_text, items = build_hw_text(day_index)
+        hw_text, items = build_hw_text(day_index, USER_CLASS.get(chat_id, DEFAULT_CLASS))
         if not hw_text:
             bot.edit_message_text("На этот день свежих заданий на сайте пока нет.", chat_id, msg_id)
             return
@@ -801,6 +925,31 @@ def on_solve(call):
     process(call.message.chat.id, call.message.message_id, uid,
             call.from_user.first_name, "answer", subject, task, [])
 
+@bot.callback_query_handler(func=lambda call: call.data.startswith("hwdone:"))
+def on_hw_done(call):
+    """Кнопка ✅ под домашкой: отметить задание выполненным."""
+    try:
+        _, token, idx = call.data.split(":")
+        idx = int(idx)
+        items = HW_CACHE[token]
+    except Exception:
+        bot.answer_callback_query(call.id, "Список устарел, открой /hw заново.", show_alert=True)
+        return
+    done = HW_DONE.setdefault(token, set())
+    if idx in done:
+        done.discard(idx)
+        msg = "Вернул в список."
+    else:
+        done.add(idx)
+        left = sum(1 for i, (s, t) in enumerate(items) if t and i not in done)
+        msg = "Всё выполнено! 🎉" if left == 0 else f"Молодец! 💪 Осталось: {left}"
+    try:
+        bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id,
+                                      reply_markup=_hw_kb(token, items))
+    except Exception:
+        pass
+    bot.answer_callback_query(call.id, msg)
+
 
 # ===========================================================================
 # Ежедневная рассылка домашки
@@ -821,6 +970,26 @@ def _load_subs():
 
 
 subs = _load_subs()
+# Выбранный класс для каждого чата (переживает перезапуск через Redis)
+CLASS_KEY = "hwbot:classes"
+
+
+def _load_classes():
+    if kv_enabled():
+        raw = kv_load(CLASS_KEY, {})
+        try:
+            return {int(k): v for k, v in raw.items()}
+        except Exception:
+            return {}
+    return {}
+
+
+USER_CLASS = _load_classes()
+
+
+def class_save():
+    if kv_enabled():
+        kv_save(CLASS_KEY, {str(k): v for k, v in USER_CLASS.items()})
 
 
 def _save_subs():
@@ -851,6 +1020,38 @@ def delete_one(call):
     except Exception:
         pass
 
+def class_keyboard():
+    kb = InlineKeyboardMarkup(row_width=3)
+    kb.add(*[InlineKeyboardButton(name, callback_data=f"setclass:{name}") for name in CLASSES])
+    return kb
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("setclass:"))
+def on_setclass(call):
+    name = call.data.split(":", 1)[1]
+    if name not in CLASSES:
+        bot.answer_callback_query(call.id, "Такого класса нет.", show_alert=True)
+        return
+    USER_CLASS[call.message.chat.id] = name
+    class_save()
+    bot.answer_callback_query(call.id, f"Класс: {name}")
+    try:
+        bot.edit_message_text(f"✅ Класс выбран: <b>{html.escape(name)}</b>\n"
+                              "Домашка: /hw · рассылка: /subscribe · сменить: /class",
+                              call.message.chat.id, call.message.message_id, parse_mode="HTML")
+    except Exception:
+        pass
+
+
+@bot.message_handler(commands=["class"])
+def cmd_class(message):
+    if not gate(message, cooldown=False):
+        return
+    cur = USER_CLASS.get(message.chat.id, DEFAULT_CLASS)
+    bot.send_message(message.chat.id,
+                     f"Сейчас выбран: <b>{html.escape(cur)}</b>. Выбери свой класс:",
+                     parse_mode="HTML", reply_markup=class_keyboard())
+
 
 @bot.message_handler(commands=["subscribe"])
 def cmd_subscribe(message):
@@ -879,32 +1080,30 @@ RETRY_DELAY = 10 * 60       # пауза между попытками, секу
 
 def send_daily():
     day_index = next_school_day()
-
-    hw_text, items = None, []
-    for attempt in range(1, RETRY_ATTEMPTS + 1):
-        try:
-            hw_text, items = build_hw_text(day_index)
-            break                                   # получилось
-        except Exception:
-            log.exception("Рассылка: сайт недоступен (попытка %d из %d)", attempt, RETRY_ATTEMPTS)
-            if attempt < RETRY_ATTEMPTS:
-                time.sleep(RETRY_DELAY)
-    else:
-        # все попытки не удались: сообщаем, что домашку получить не вышло
-        for chat_id in broadcast_targets():
+    for chat_id in broadcast_targets():
+        hw_text, items = None, []
+        for attempt in range(1, RETRY_ATTEMPTS + 1):
+            try:
+                hw_text, items = build_hw_text(day_index, USER_CLASS.get(chat_id, DEFAULT_CLASS))
+                break
+            except Exception:
+                log.exception("Рассылка: сайт недоступен (попытка %d из %d)", attempt, RETRY_ATTEMPTS)
+                if attempt < RETRY_ATTEMPTS:
+                    time.sleep(RETRY_DELAY)
+        else:
             try:
                 bot.send_message(chat_id, "⚠️ Сайт школы сейчас недоступен, домашку получить не удалось. "
                                           "Попробуй позже командой /hw.")
             except Exception:
                 log.exception("Рассылка: не удалось отправить уведомление в чат %s", chat_id)
-        return
+            continue
 
-    if not hw_text:
-        log.info("Рассылка: заданий на день %s нет", day_index)
-        return
+        if not hw_text:
+            log.info("Рассылка: чат %s (класс %s): заданий нет",
+                     chat_id, USER_CLASS.get(chat_id, DEFAULT_CLASS))
+            continue
 
-    chunks = split_message(hw_text)
-    for chat_id in broadcast_targets():
+        chunks = split_message(hw_text)
         try:
             markup = hw_markup(items, "del_one")
             for i, chunk in enumerate(chunks):
@@ -1001,6 +1200,16 @@ def process(chat_id, reply_to, uid, name, mode, subject, task, media):
                 return
             context, pages = find_context(path, task)
         prompt = build_prompt(mode, context, task, uid)
+        cache_key = None
+        if not media:
+            cache_key = hashlib.md5(
+                f"{subject}|{mode}|{settings[uid]['length']}|{task}".encode("utf-8")
+            ).hexdigest()
+            if cache_key in ANSWER_CACHE:
+                send_answer(chat_id, status, ANSWER_CACHE[cache_key],
+                            uid=uid, task=task,
+                            subject=subject if subject and subject != "none" else None)
+                return
         answer = call_gemini([prompt, *media], system_instruction=build_system(uid))
         if not answer:
             bot.edit_message_text("Сейчас ИИ перегружен или недоступен. Попробуй ещё раз через минуту.",
@@ -1015,7 +1224,12 @@ def process(chat_id, reply_to, uid, name, mode, subject, task, media):
 
         quick = settings[uid]["length"] == "quick"
         footer = f"\n\n📖 Использованы страницы PDF: {', '.join(map(str, pages))}" if pages and not quick else ""
-        send_answer(chat_id, status, auto_note + answer + footer)
+        full_text = auto_note + answer + footer
+        if cache_key:
+            ANSWER_CACHE[cache_key] = full_text
+            _trim(ANSWER_CACHE)
+        send_answer(chat_id, status, full_text, uid=uid, task=task,
+                    subject=subject if subject and subject != "none" else None)
 
     except Exception:
         log.exception("Ошибка обработки запроса")
@@ -1097,17 +1311,25 @@ def run_quiz(message, subject, topic):
 HELP_TEXT = (
     "<b>Как пользоваться</b>\n"
     "Пиши: <code>физика задача 3.5</code> — или просто текст задания (предмет запомнится).\n"
-    "Можно прислать <b>фото</b> задания или <b>голосовое</b> сообщение.\n\n"
+    "Можно прислать <b>фото</b>, <b>голосовое</b> или <b>PDF-файл</b> от учителя.\n"
+    "Чтобы спросить по PDF — пришли файл с подписью: «объясни», «реши задание 3».\n\n"
     "<b>Команды</b>\n"
     "/hw — домашка с сайта школы (есть «На завтра»)\n"
     "/subscribe, /unsubscribe — рассылка домашки в 16:00\n"
     "/schedule — расписание уроков\n"
+    "/class — выбрать свой класс 🏫\n"
     "/subjects — список предметов\n"
     "/subject физика — выбрать текущий предмет\n"
     "/explain [предмет] задание — объяснить, КАК решать\n"
     "/check [предмет] решение — проверить твоё решение (можно фото с подписью /check)\n"
     "/summary [предмет] тема — шпаргалка для повторения\n"
     "/quiz [предмет] [тема] — тест из 5 вопросов\n"
+    "/top — рейтинг класса 🏆\n"
+    "/cards [предмет] [тема] — карточки для запоминания 🃏\n"
+    "/cards — повторить накопившиеся карточки\n"
+    "/proofread [текст] — проверить орфографию ✍️\n"
+    "/remind 20.05 контрольная — напоминание ⏰\n"
+    "/pomodoro 25 — таймер учёба/перерыв 🍅\n"
     "/short, /detail, /normal — длина ответов\n"
     "/essay [предмет] тема — написать сочинение\n"
     "/quick — режим только коротких ответов (выйти: /normal)\n"
@@ -1121,6 +1343,10 @@ HELP_TEXT = (
 def cmd_help(message):
     if gate(message, cooldown=False):
         bot.send_message(message.chat.id, HELP_TEXT, parse_mode="HTML")
+        if message.text.strip().startswith("/start") and message.chat.id not in USER_CLASS:
+            bot.send_message(message.chat.id,
+                             "И выбери свой класс, чтобы домашка собиралась правильно:",
+                             reply_markup=class_keyboard())
 
 
 @bot.message_handler(commands=["id"])
@@ -1199,8 +1425,554 @@ def cmd_stats(message):
             for k, v in rows
         )
     bot.reply_to(message, text)
+def streak_days(u):
+    """Сколько дней подряд человек пользовался ботом."""
+    d = datetime.now(KYIV).date()
+    if not u["days"].get(d.isoformat()):
+        d -= timedelta(days=1)
+    s = 0
+    while u["days"].get(d.isoformat()):
+        s += 1
+        d -= timedelta(days=1)
+    return s
+@bot.message_handler(commands=["top"])
+def cmd_top(message):
+    if not gate(message, cooldown=False):
+        return
+    rows = sorted(stats["users"].items(), key=lambda kv: kv[1]["total"], reverse=True)[:10]
+    if not rows:
+        bot.reply_to(message, "Пока пусто — реши первое задание!")
+        return
+    medals = ["🥇", "🥈", "🥉"]
+    lines = [
+        f"{medals[i] if i < 3 else str(i + 1) + '.'} {html.escape(str(v['name']))} — {v['total']} 🔥{streak_days(v)}"
+        for i, (k, v) in enumerate(rows)
+    ]
+    bot.reply_to(message, "🏆 <b>Топ класса</b>\n\n" + "\n".join(lines), parse_mode="HTML")
+# ===========================================================================
+# Карточки с интервальным повторением (/cards)
+# ===========================================================================
+CARDS_PER_SET = 8
+BOXES = [1, 2, 4, 7, 16]   # через сколько дней снова показать карточку
+
+CARDS_MEM = {}             # хранилище, если Redis не подключён
 
 
+def cards_load(uid):
+    if kv_enabled():
+        return kv_load(f"hwbot:cards:{uid}", [])
+    return CARDS_MEM.get(uid, [])
+
+
+def cards_save(uid, cards):
+    if kv_enabled():
+        kv_save(f"hwbot:cards:{uid}", cards)
+    else:
+        CARDS_MEM[uid] = cards
+
+
+CARD_SESSION = {}   # uid -> {"cards": [...], "order": [...], "pos": int, "chat": id}
+
+
+def _today():
+    return datetime.now(KYIV).date()
+
+
+@bot.message_handler(commands=["cards"])
+def cmd_cards(message):
+    if not gate(message):
+        return
+    uid = message.from_user.id
+    parts = message.text.split(maxsplit=2)
+    today = _today().isoformat()
+
+    # /cards без аргументов - сессия повторения
+    if len(parts) < 2:
+        all_cards = cards_load(uid)
+        order = [i for i, c in enumerate(all_cards) if c.get("due", today) <= today]
+        if not order:
+            extra = f" Следующее повторение карточек: {min((c['due'] for c in all_cards), default='')}" if all_cards else ""
+            bot.reply_to(message, "Повторять пока нечего 🎉" + extra +
+                                  "\nСоздать карточки: /cards физика <тема>")
+            return
+        CARD_SESSION[uid] = {"cards": all_cards, "order": order, "pos": 0,
+                             "chat": message.chat.id}
+        show_card(uid)
+        return
+
+    subject = resolve_subject(parts[1])
+    if not subject:
+        bot.reply_to(message, "Не знаю такой предмет. Список: /subjects")
+        return
+    topic = parts[2].strip() if len(parts) > 2 else ""
+    if not topic:
+        bot.reply_to(message, "Укажи тему: /cards физика давление")
+        return
+    if limit_reached(uid):
+        bot.reply_to(message, f"Дневной лимит ({DAILY_LIMIT} запросов) исчерпан.")
+        return
+    path = book_path(subject)
+    if not path:
+        bot.reply_to(message, f"Файл учебника «{SUBJECTS[subject]}» не найден.")
+        return
+
+    status = bot.reply_to(message, "Составляю карточки... ⏱️")
+    bot.send_chat_action(message.chat.id, "typing")
+    try:
+        context, _ = find_context(path, topic)
+        prompt = (
+            "На основе фрагментов учебника составь 8 карточек для запоминания по теме "
+            f"«{topic}». Верни ТОЛЬКО JSON-массив вида "
+            '[{"q": "вопрос или термин", "a": "короткий ответ или определение"}]. '
+            "Вопросы короткие, ответы до 25 слов, на языке учебника, без HTML.\n\n"
+            f"Фрагменты:\n{context or '(нет)'}"
+        )
+        raw = call_gemini(prompt, json_mode=True, temperature=0.4)
+        if not raw:
+            bot.edit_message_text("ИИ сейчас недоступен. Попробуй позже.",
+                                  message.chat.id, status.message_id)
+            return
+        items = parse_json(raw)
+        all_cards = cards_load(uid)
+        added = 0
+        for it in items[:CARDS_PER_SET]:
+            if it.get("q") and it.get("a"):
+                all_cards.append({"q": str(it["q"])[:300], "a": str(it["a"])[:600],
+                                  "box": 0, "due": _today().isoformat()})
+                added += 1
+        if not added:
+            bot.edit_message_text("Не получилось составить карточки, попробуй ещё раз.",
+                                  message.chat.id, status.message_id)
+            return
+        cards_save(uid, all_cards)
+        register_use(uid, message.from_user.first_name)
+        bot.edit_message_text(
+            f"✅ Добавил {added} карточек по теме «{topic}».\n"
+            "Повторять: /cards — новые будут появляться по расписанию повторений.",
+            message.chat.id, status.message_id)
+    except Exception:
+        log.exception("Ошибка карточек")
+        try:
+            bot.edit_message_text("Произошла ошибка. Попробуй ещё раз.",
+                                  message.chat.id, status.message_id)
+        except Exception:
+            pass
+
+
+def show_card(uid):
+    s = CARD_SESSION.get(uid)
+    if not s:
+        return
+    card = s["cards"][s["order"][s["pos"]]]
+    text = (f"🃏 Карточка {s['pos'] + 1}/{len(s['order'])}\n\n"
+            f"<b>{html.escape(card['q'])}</b>")
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("Показать ответ", callback_data="card:show"))
+    try:
+        bot.send_message(s["chat"], text, parse_mode="HTML", reply_markup=kb)
+    except Exception:
+        bot.send_message(s["chat"], strip_tags(text), reply_markup=kb)
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "card:show")
+def card_show(call):
+    uid = call.from_user.id
+    s = CARD_SESSION.get(uid)
+    bot.answer_callback_query(call.id)
+    if not s or call.message.chat.id != s["chat"]:
+        return
+    card = s["cards"][s["order"][s["pos"]]]
+    kb = InlineKeyboardMarkup()
+    kb.row(InlineKeyboardButton("✅ Знаю", callback_data="card:ok"),
+           InlineKeyboardButton("❌ Не знаю", callback_data="card:no"))
+    try:
+        bot.edit_message_text(
+            f"🃏 Карточка {s['pos'] + 1}/{len(s['order'])}\n\n"
+            f"<b>{html.escape(card['q'])}</b>\n\n{html.escape(card['a'])}",
+            call.message.chat.id, call.message.message_id,
+            parse_mode="HTML", reply_markup=kb)
+    except Exception:
+        pass
+
+
+@bot.callback_query_handler(func=lambda call: call.data in ("card:ok", "card:no"))
+def card_grade(call):
+    uid = call.from_user.id
+    s = CARD_SESSION.get(uid)
+    if not s or call.message.chat.id != s["chat"]:
+        bot.answer_callback_query(call.id)
+        return
+    good = call.data.endswith("ok")
+    card = s["cards"][s["order"][s["pos"]]]
+    if good:
+        card["box"] = min(card.get("box", 0) + 1, len(BOXES) - 1)
+    else:
+        card["box"] = 0
+    card["due"] = (_today() + timedelta(days=BOXES[card["box"]])).isoformat()
+    s["pos"] += 1
+    cards_save(uid, s["cards"])
+    try:
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+    except Exception:
+        pass
+    bot.answer_callback_query(call.id, "Молодец! 💪" if good else "Появится снова завтра.")
+    if s["pos"] < len(s["order"]):
+        show_card(uid)
+    else:
+        CARD_SESSION.pop(uid, None)
+        bot.send_message(call.message.chat.id,
+                         "🎉 Сессия завершена! Нажми /cards завтра — покажу следующие.")
+
+
+# ===========================================================================
+# /proofread - проверка орфографии
+# ===========================================================================
+@bot.message_handler(commands=["proofread"])
+def cmd_proofread(message):
+    if not gate(message):
+        return
+    uid = message.from_user.id
+    if message.reply_to_message and message.reply_to_message.text:
+        task = message.reply_to_message.text
+    else:
+        parts = message.text.split(maxsplit=1)
+        task = parts[1].strip() if len(parts) > 1 else ""
+    if not task:
+        bot.reply_to(message, "Пиши так: /proofread <текст>\n"
+                              "Или ответь (reply) на сообщение командой /proofread")
+        return
+    if limit_reached(uid):
+        bot.reply_to(message, f"Дневной лимит ({DAILY_LIMIT} запросов) исчерпан.")
+        return
+    status = bot.reply_to(message, "Проверяю... ⏱️")
+    bot.send_chat_action(message.chat.id, "typing")
+    prompt = (
+        "Проверь текст на орфографические, пунктуационные и грамматические ошибки "
+        "(язык определяй сам: украинский или русский). Верни:\n"
+        "1) Список ошибок по пунктам в виде «неправильно → правильно (правило)».\n"
+        "2) Строку «ИСПРАВЛЕННЫЙ ТЕКСТ:» и текст без ошибок целиком.\n"
+        "Если ошибок нет — так и скажи. Не используй HTML.\n\n"
+        f"Текст:\n{task[:3000]}"
+    )
+    answer = call_gemini([prompt], system_instruction=SYSTEM_BASE)
+    if not answer:
+        bot.edit_message_text("ИИ сейчас недоступен, попробуй позже.",
+                              message.chat.id, status.message_id)
+        return
+    register_use(uid, message.from_user.first_name)
+    send_answer(message.chat.id, status, answer, uid=uid, task=task[:500])
+
+# ===========================================================================
+# /remind - напоминания о контрольных
+# ===========================================================================
+def reminds_load():
+    if kv_enabled():
+        return kv_load("hwbot:reminds", [])
+    return REMINDS_MEM
+
+
+def reminds_save(r):
+    if kv_enabled():
+        kv_save("hwbot:reminds", r)
+    else:
+        REMINDS_MEM[:] = r
+
+
+@bot.message_handler(commands=["remind"])
+def cmd_remind(message):
+    if not gate(message):
+        return
+    parts = message.text.split(maxsplit=1)
+    text = parts[1].strip() if len(parts) > 1 else ""
+    if text.lower() in ("список", "list"):
+        mine = [r for r in reminds_load() if r["chat"] == message.chat.id]
+        if not mine:
+            bot.reply_to(message, "Напоминаний нет. Добавить: /remind 20.05 контрольная по физике")
+            return
+        lines = [f"• {r['due']} — {r['text']}" for r in sorted(mine, key=lambda x: x["due"])]
+        bot.reply_to(message, "⏰ Напоминания:\n" + "\n".join(lines))
+        return
+    m = re.search(r"(\d{1,2})[./](\d{1,2})(?:[./](\d{4}))?", text)
+    if not m:
+        bot.reply_to(message, "Укажи дату и что напомнить:\n/remind 20.05 контрольная по физике\n"
+                              "Показать список: /remind список")
+        return
+    d_, mo_, y_ = m.groups()
+    year = int(y_) if y_ else _today().year
+    try:
+        due = datetime(year, int(mo_), int(d_)).date()
+    except ValueError:
+        bot.reply_to(message, "Такой даты не бывает. Пример: /remind 20.05 контрольная")
+        return
+    if not y_ and due < _today():
+        due = datetime(year + 1, int(mo_), int(d_)).date()
+    what = (text[:m.start()] + " " + text[m.end():]).strip() or "Напоминание"
+    reminds = reminds_load()
+    reminds.append({"chat": message.chat.id, "uid": message.from_user.id,
+                    "text": what[:300], "due": due.isoformat(), "warned": False})
+    reminds_save(reminds)
+    bot.reply_to(message, f"👌 Записал: {what}\nНапомню {due.strftime('%d.%m.%Y')} и за 2 дня до.")
+
+
+def _check_reminds():
+    today = _today()
+    reminds = reminds_load()
+    if not reminds:
+        return
+    changed, keep = False, []
+    for r in reminds:
+        try:
+            left = (datetime.fromisoformat(r["due"]).date() - today).days
+        except ValueError:
+            continue
+        if left == 2 and not r.get("warned"):
+            try:
+                bot.send_message(r["chat"], f"⚠️ Через 2 дня: {r['text']}")
+            except Exception:
+                pass
+            r["warned"] = True
+            changed = True
+            keep.append(r)
+        elif left == 0:
+            try:
+                bot.send_message(r["chat"], f"‼️ Сегодня: {r['text']}")
+            except Exception:
+                pass
+            changed = True
+        elif left > 0:
+            keep.append(r)
+        else:
+            changed = True
+    if changed:
+        reminds_save(keep)
+
+
+# ===========================================================================
+# /pomodoro - таймер учёбы
+# ===========================================================================
+@bot.message_handler(commands=["pomodoro"])
+def cmd_pomodoro(message):
+    if not gate(message):
+        return
+    uid = message.from_user.id
+    args = message.text.split()
+    if len(args) > 1 and args[1].lower() in ("stop", "стоп"):
+        s = POMODORO.pop(uid, None)
+        if s:
+            s["t1"].cancel()
+            if s.get("t2"):
+                s["t2"].cancel()
+            bot.reply_to(message, "🍅 Таймер остановлен.")
+        else:
+            bot.reply_to(message, "Таймер и не был запущен.")
+        return
+    try:
+        mins = int(args[1]) if len(args) > 1 else 25
+    except ValueError:
+        mins = 25
+    if not 5 <= mins <= 90:
+        bot.reply_to(message, "Ставь от 5 до 90 минут: /pomodoro 25")
+        return
+    old = POMODORO.pop(uid, None)
+    if old:
+        old["t1"].cancel()
+        if old.get("t2"):
+            old["t2"].cancel()
+    chat = message.chat.id
+    brk = max(3, mins // 5)
+
+    def on_break():
+        try:
+            bot.send_message(chat, f"⏰ {mins} минут вышли! Перерыв {brk} мин ☕️")
+        except Exception:
+            pass
+        t2 = threading.Timer(brk * 60, back_to_work)
+        t2.daemon = True
+        t2.start()
+        POMODORO[uid]["t2"] = t2
+
+    def back_to_work():
+        POMODORO.pop(uid, None)
+        try:
+            bot.send_message(chat, "🍅 Перерыв закончен — за учёбу!")
+        except Exception:
+            pass
+
+    t1 = threading.Timer(mins * 60, on_break)
+    t1.daemon = True
+    t1.start()
+    POMODORO[uid] = {"t1": t1, "t2": None}
+    bot.reply_to(message, f"🍅 Погнали: {mins} мин учёбы → {brk} мин перерыва.\nОстановить: /pomodoro stop")
+
+
+# ===========================================================================
+# Ежедневный отчёт админу + фоновый цикл
+# ===========================================================================
+ADMIN_REPORT_HOUR = 20
+_last_report = None
+
+
+def _daily_admin_report():
+    global _last_report
+    if not ADMIN_ID:
+        return
+    now = datetime.now(KYIV)
+    if now.hour < ADMIN_REPORT_HOUR or _last_report == now.date():
+        return
+    _last_report = now.date()
+    today = now.date().isoformat()
+    reqs = sum(u["days"].get(today, 0) for u in stats["users"].values())
+    active = sum(1 for u in stats["users"].values() if u["days"].get(today, 0))
+    redis_ok = "не подключён"
+    if kv_enabled():
+        try:
+            _kv(["PING"])
+            redis_ok = "работает"
+        except Exception:
+            redis_ok = "НЕ ОТВЕЧАЕТ"
+    try:
+        bot.send_message(ADMIN_ID,
+                         f"📊 Отчёт за {today}\n"
+                         f"Запросов: {reqs} (активных учеников: {active})\n"
+                         f"👎 плохих ответов: {FB_LOG.count(today)}\n"
+                         f"Redis: {redis_ok}\n"
+                         f"Бот живёт: {(time.time() - START_TIME) / 3600:.1f} ч")
+    except Exception:
+        log.exception("Не удалось отправить отчёт админу")
+
+
+def daily_loop():
+    while True:
+        try:
+            _check_reminds()
+            _daily_admin_report()
+            _question_of_the_day()
+        except Exception:
+            log.exception("Ошибка daily_loop")
+        time.sleep(300)
+# ===========================================================================
+# Приём PDF-файлов от учителя
+# ===========================================================================
+MAX_PDF_CHARS = 15000
+
+
+@bot.message_handler(content_types=["document"])
+def on_document(message):
+    if not gate(message):
+        return
+    uid = message.from_user.id
+    doc = message.document
+    name = doc.file_name or "file.pdf"
+    if not (name.lower().endswith(".pdf") or doc.mime_type == "application/pdf"):
+        bot.reply_to(message, "Пока умею только PDF. Пришли файл .pdf")
+        return
+    if (doc.file_size or 0) > 20 * 1024 * 1024:
+        bot.reply_to(message, "Файл больше 20 МБ — Telegram не даст его скачать.")
+        return
+    if limit_reached(uid):
+        bot.reply_to(message, f"Дневной лимит ({DAILY_LIMIT} запросов) исчерпан.")
+        return
+    status = bot.reply_to(message, "Читаю файл... ⏱️")
+    bot.send_chat_action(message.chat.id, "typing")
+    try:
+        info = bot.get_file(doc.file_id)
+        data = bot.download_file(info.file_path)
+        reader = PdfReader(BytesIO(data))
+        text = "\n".join((p.extract_text() or "").strip() for p in reader.pages).strip()
+    except Exception:
+        log.exception("Не удалось прочитать PDF")
+        bot.edit_message_text("Не получилось прочитать PDF. Попробуй прислать фото страниц.",
+                              message.chat.id, status.message_id)
+        return
+    if not text:
+        bot.edit_message_text("В PDF нет текста (похоже, это скан). Пришли фото страниц.",
+                              message.chat.id, status.message_id)
+        return
+    question = (message.caption or "").strip()
+    if not question:
+        head = html.escape(text[:600])
+        bot.edit_message_text(
+            "📄 Файл прочитал. Теперь перешли этот же файл с подписью, что с ним делать, "
+            "например: «объясни тему», «реши задание 3», «составь тест по файлу».\n\n"
+            f"<b>Начало документа:</b>\n{head}",
+            message.chat.id, status.message_id, parse_mode="HTML")
+        return
+    try:
+        answer = call_gemini(
+            [f"Документ от учителя (может быть обрезан):\n{text[:MAX_PDF_CHARS]}\n\n"
+             f"Вопрос или задание ученика по документу: {question}\n\n"
+             "Ответь по документу. Оформи структурированно, HTML-теги Telegram: <b>, <i>, <code>."],
+            system_instruction=SYSTEM_BASE)
+    except Exception:
+        log.exception("Ошибка запроса по PDF")
+        answer = None
+    if not answer:
+        bot.edit_message_text("ИИ сейчас недоступен, попробуй позже.",
+                              message.chat.id, status.message_id)
+        return
+    register_use(uid, message.from_user.first_name)
+    send_answer(message.chat.id, status, answer, uid=uid, task=question[:500])
+
+# ===========================================================================
+# Вопрос дня (шлём в 18:00 всем подписчикам рассылки)
+# ===========================================================================
+QDAY_HOUR = 18
+_qday_last = None
+QDAY_CACHE = {}                    # token -> ответ
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("qday:"))
+def on_qday_answer(call):
+    token = call.data.split(":", 1)[1]
+    answer = QDAY_CACHE.get(token)
+    bot.answer_callback_query(call.id)
+    if answer:
+        bot.send_message(call.message.chat.id, f"💡 {html.escape(answer)}")
+    else:
+        bot.send_message(call.message.chat.id, "Ответ устарел (бот перезапускался).")
+
+
+def _question_of_the_day():
+    global _qday_last
+    now = datetime.now(KYIV)
+    if now.hour < QDAY_HOUR or _qday_last == now.date():
+        return
+    _qday_last = now.date()        # флаг ставим сразу: один раз в день, без повторов
+    subjects = [s for s in SUBJECTS if book_path(s)]
+    if not subjects:
+        return
+    subj = random.choice(subjects)
+    pages = [p for p in load_pages(book_path(subj)) if len(p) > 400]
+    if not pages:
+        return
+    page = random.choice(pages)
+    raw = call_gemini(
+        "Придумай по фрагменту учебника ОДИН интересный вопрос для ученика 8 класса "
+        "и короткий ответ на него (до 40 слов). Верни ТОЛЬКО JSON вида "
+        '{"q": "вопрос", "a": "ответ"}.\n\n'
+        f"Фрагмент учебника ({subj}):\n{page[:3000]}",
+        json_mode=True, temperature=0.8)
+    if not raw:
+        log.warning("Вопрос дня: ИИ не ответил")
+        return
+    try:
+        it = parse_json(raw)
+        q, a = str(it["q"]).strip(), str(it["a"]).strip()
+    except Exception:
+        return
+    if not q or not a:
+        return
+    token = uuid.uuid4().hex[:8]
+    QDAY_CACHE[token] = a
+    _trim(QDAY_CACHE, 50)
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("💡 Показать ответ", callback_data=f"qday:{token}"))
+    text = f"❓ <b>Вопрос дня</b> ({html.escape(subj)})\n\n{html.escape(q)}"
+    for chat_id in broadcast_targets():
+        try:
+            bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=kb)
+        except Exception:
+            log.exception("Вопрос дня: не отправилось в %s", chat_id)
 def _mode_command(mode, usage):
     def handler(message):
         if not gate(message):
@@ -1279,7 +2051,13 @@ def on_voice(message):
 @bot.message_handler(content_types=["text"])
 def on_text(message):
     if message.text.startswith("/"):
-        bot.reply_to(message, "Не знаю такую команду. Список команд: /help")
+        cmd = message.text.split()[0].split("@")[0].lstrip("/").lower()
+        close = get_close_matches(cmd, ["hw", "quiz", "explain", "check", "summary", "essay",
+                                        "schedule", "subjects", "subject", "top", "stats",
+                                        "short", "detail", "normal", "quick", "reset",
+                                        "subscribe", "unsubscribe", "help"], n=1, cutoff=0.6)
+        hint = f" Может, ты имел в виду /{close[0]}?" if close else ""
+        bot.reply_to(message, f"Не знаю такую команду.{hint}\nСписок: /help")
         return
     if not gate(message):
         return
@@ -1329,6 +2107,7 @@ if __name__ == "__main__":
         bot.set_my_commands([
             tg.BotCommand("help", "Как пользоваться"),
             tg.BotCommand("schedule", "Расписание уроков"),
+            tg.BotCommand("class", "Выбрать класс"),
             tg.BotCommand("subscribe", "Домашка каждый день в 16:00"),
             tg.BotCommand("unsubscribe", "Отключить рассылку"),
             tg.BotCommand("subjects", "Список предметов"),
@@ -1350,6 +2129,7 @@ if __name__ == "__main__":
 
     threading.Thread(target=preload_books, daemon=True).start()
     threading.Thread(target=broadcast_loop, daemon=True).start()
+    threading.Thread(target=daily_loop, daemon=True).start()
     log.info("Бот запущен. Модели: %s | ключей Gemini: %d", ", ".join(MODELS), len(API_KEYS))
     while True:
         try:
