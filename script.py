@@ -156,6 +156,7 @@ try:
         tg.BotCommand("proofread", "Проверить орфографию"),
         tg.BotCommand("remind", "Напоминание о контрольной"),
         tg.BotCommand("pomodoro", "Таймер учёбы"),
+        tg.BotCommand("class", "Выбрать класс"),
         tg.BotCommand("help", "Справка"),
         tg.BotCommand("exam", "Пробная контрольная"),
         tg.BotCommand("formulas", "Тренажёр формул"),
@@ -690,15 +691,6 @@ def book_path(subject):
     # ===========================================================================
     # Расписание и обработчики домашки (ВЫНЕСЕНО ИЗ PROCESS НАВЕРХ)
     # ===========================================================================
-SCHEDULE = {
-    "0": ["Географія", "Біологія", "Геометрія", "Фінансова грамотність", "Фізика", "Українська література"],
-    "1": ["Фізика", "Алгебра", "Англійська мова", "Інформатика", "Українська мова", "Історія"],
-    "2": ["Алгебра", "Англійська мова", "Фіз. виховання", "Зарубіжна література", "Основи здоров'я", "Інформатика",
-          "Трудове навчання"],
-    "3": ["Фіз. виховання", "Історія", "Українська мова", "Українська література", "Географія", "Хімія",
-          "Англійська мова"],
-    "4": ["Англійська мова", "Українська мова", "Біологія", "Алгебра", "Фіз. виховання", "Мистецтво", "Хімія"],
-}
 
 # Классы школы: имя -> ID на сайте sch3.edu.vn.ua
 CLASSES = {
@@ -735,7 +727,8 @@ CLASSES = {
 "9-В": "32",
 }
 DEFAULT_CLASS = "8-Б"
-SCHEDULES = {"8-Б": SCHEDULE}   # у классов без расписания бот покажет все свежие задания с сайта
+SCHEDULES = {}   # все расписания теперь через /setschedule (Redis)
+# у классов без расписания бот покажет все свежие задания с сайта
 @bot.message_handler(commands=['hw'])
 def hw_menu(message):
     markup = InlineKeyboardMarkup()
@@ -752,10 +745,17 @@ def hw_menu(message):
 def cmd_schedule(message):
     if not gate(message, cooldown=False):
         return
+    class_name = user_class(message.chat.id)
+    sched = SCHEDULES.get(class_name)
+    if not sched:
+        bot.reply_to(message, f"Расписание для {html.escape(class_name)} пока не добавлено, "
+                              "но домашка работает: /hw")
+        return
     names = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница"]
-    text = "\n\n".join(
-        f"<b>{names[int(d)]}</b>\n" + "\n".join(f"{i}. {s}" for i, s in enumerate(lessons, 1))
-        for d, lessons in SCHEDULE.items()
+    text = f"📅 <b>Расписание {html.escape(class_name)}</b>\n\n" + "\n\n".join(
+        f"<b>{names[int(d)]}</b>\n"
+        + "\n".join(f"{i}. {html.escape(s)}" for i, s in enumerate(lessons, 1))
+        for d, lessons in sched.items()
     )
     bot.send_message(message.chat.id, text, parse_mode="HTML")
 
@@ -763,6 +763,69 @@ def cmd_schedule(message):
 from concurrent.futures import ThreadPoolExecutor
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+# ===========================================================================
+# Автоматизация классов: автопоиск с сайта, /addclass, расписания из Redis
+# ===========================================================================
+_EXTRA_CLASSES_MEM = {}
+_SCHED_MEM = {}
+
+
+def discover_classes():
+    """Тянет список классов (имя -> ID) с выпадающего списка сайта школы."""
+    try:
+        r = requests.get("https://sch3.edu.vn.ua/disted", headers=HEADERS, timeout=10)
+        r.encoding = 'utf-8'
+        soup = BeautifulSoup(r.text, 'html.parser')
+        found = {}
+        for sel in soup.find_all('select'):
+            for o in sel.find_all('option'):
+                val = (o.get('value') or '').strip()
+                name = canon_class(o.text.strip())
+                if val.isdigit() and re.fullmatch(r"\d{1,2}-?[А-ЯІЇЄҐ]{1,2}", name):
+                    found[name] = val
+        log.info("Сайт: найдено классов: %d", len(found))
+        return found
+    except Exception:
+        log.warning("Сайт: не удалось автообнаружить классы — работает ручной CLASSES")
+        return {}
+
+
+def site_subjects(class_name):
+    """Названия предметов, которые встречаются на сайте у этого класса."""
+    class_id = CLASSES.get(class_name)
+    if not class_id:
+        return []
+    try:
+        response = requests.post("https://sch3.edu.vn.ua/disted",
+                                 data={'class': class_id}, headers=HEADERS, timeout=10)
+        response.encoding = 'utf-8'
+        soup = BeautifulSoup(response.text, 'html.parser')
+        subs = []
+        for row in soup.find_all('tr'):
+            cols = row.find_all('td')
+            if len(cols) >= 5:
+                s = cols[3].text.strip()
+                if s and s not in subs:
+                    subs.append(s)
+        return subs
+    except Exception:
+        log.exception("Не удалось получить предметы с сайта для %s", class_name)
+        return []
+
+
+def _merge_classes_and_schedules():
+    for k, v in discover_classes().items():
+        CLASSES.setdefault(k, v)          # ручные записи кода не перебиваем
+    extras = kv_load("hwbot:extra_classes", {}) if kv_enabled() else _EXTRA_CLASSES_MEM
+    for k, v in (extras or {}).items():
+        CLASSES[canon_class(k)] = v
+    saved = kv_load("hwbot:schedules", {}) if kv_enabled() else _SCHED_MEM
+    for k, v in (saved or {}).items():
+        if isinstance(v, dict) and v:
+            SCHEDULES[canon_class(k)] = v
+
+
+threading.Thread(target=_merge_classes_and_schedules, daemon=True).start()
 
 
 def fetch_task_text(url):
@@ -817,13 +880,46 @@ SUBJECT_KEYS = {
     "Географія": "география",
     "Геометрія": "геометрия",
     "Зарубіжна література": "зарубежка",
-    "Історія": "история",
+    "Всесвітня історія": "история",
+    "Історія України": "история",
     "Мистецтво": "музыка",
     "Українська література": "укрлит",
     "Українська мова": "укрмов",
-    "Фізика": "физика",
+    "Фізика і астрономія": "физика",
     "Хімія": "химия",
 }
+# Свои учебники по классам. Класса нет в словаре или словарь пустой = решаем без учебников.
+SUBJECT_KEYS_BY_CLASS = {
+    "6-В": {},   # пока нет учебников за 6 класс - всё по общим знаниям
+}
+# Классы без учебников: по предметам не из mapping бот просит фото задания
+CLASSES_WITHOUT_BOOKS = {k for k, v in SUBJECT_KEYS_BY_CLASS.items() if not v}
+# Латинские буквы, похожие на кириллицу (A B C E H K M O P T X), приводим к кириллице.
+# Защита от невидимого бага: "6-В" в CLASSES и SCHEDULES набраны разными алфавитами.
+_HOMO = str.maketrans("ABCEHKMOPTX", "АВСЕНКМОРТХ")
+
+
+def canon_class(name):
+    """Каноничное имя класса: верхний регистр, кириллица, без дефисов и пробелов. '6-В' == '6В'."""
+    return name.upper().translate(_HOMO).replace("-", "").replace("–", "").replace(" ", "").strip()
+
+
+CLASSES = {canon_class(k): v for k, v in CLASSES.items()}
+SCHEDULES = {canon_class(k): v for k, v in SCHEDULES.items()}
+SUBJECT_KEYS_BY_CLASS = {canon_class(k): v for k, v in SUBJECT_KEYS_BY_CLASS.items()}
+DEFAULT_CLASS = canon_class(DEFAULT_CLASS)
+CLASSES_WITHOUT_BOOKS = {k for k, v in SUBJECT_KEYS_BY_CLASS.items() if not v}
+def _validate_classes():
+    for _name in SCHEDULES:
+        if _name not in CLASSES:
+            log.warning("SCHEDULES: класс %r отсутствует в CLASSES - проверь буквы (кириллица/латиница)!", _name)
+    for _name in SUBJECT_KEYS_BY_CLASS:
+        if _name not in CLASSES:
+            log.warning("SUBJECT_KEYS_BY_CLASS: класс %r отсутствует в CLASSES!", _name)
+
+
+_validate_classes()
+threading.Thread(target=_merge_classes_and_schedules, daemon=True).start()
 
 HW_CACHE = {}  # token -> [(предмет, текст задания), ...]; живёт в памяти, до перезапуска бота
 
@@ -881,7 +977,8 @@ def build_hw_text(day_index, class_name=None):
     if not latest_tasks:
         return None, []
 
-    subs_list = [s for s in subjects_today if s in latest_tasks]
+    subs_list = ([s for s in subjects_today if s in latest_tasks]
+                 if subjects_today is not None else list(latest_tasks))
     with ThreadPoolExecutor(max_workers=6) as ex:
         texts = list(ex.map(lambda s: fetch_task_text(latest_tasks[s][1]), subs_list))
 
@@ -913,7 +1010,7 @@ def parse_smart_hw(call):
     bot.edit_message_text("Сканирую сайт школы... 🕵️‍♂️", chat_id, msg_id)
 
     try:
-        hw_text, items = build_hw_text(day_index, USER_CLASS.get(chat_id, DEFAULT_CLASS))
+        hw_text, items = build_hw_text(day_index, user_class(chat_id))
         if not hw_text:
             bot.edit_message_text("На этот день свежих заданий на сайте пока нет.", chat_id, msg_id)
             return
@@ -951,8 +1048,18 @@ def on_solve(call):
         return
     last_request[uid] = now
 
+    keys = SUBJECT_KEYS_BY_CLASS.get(
+        user_class(call.message.chat.id), SUBJECT_KEYS)
+    subject = keys.get(subject_ua, "none")
+    if subject == "none" and user_class(call.message.chat.id) in CLASSES_WITHOUT_BOOKS:
+        bot.answer_callback_query(call.id)
+        bot.send_message(
+            call.message.chat.id,
+            f"📸 По «{subject_ua}» у меня пока нет учебника для этого класса.\n"
+            "Пришли фото задания следующим сообщением — решу и объясню "
+            "(можно и просто текстом написать).")
+        return
     bot.answer_callback_query(call.id, "Решаю…")
-    subject = SUBJECT_KEYS.get(subject_ua, "none")
     task = f"{subject_ua}. Домашнее задание: {task_text[:1500]}"
     process(call.message.chat.id, call.message.message_id, uid,
             call.from_user.first_name, "answer", subject, task, [])
@@ -1018,7 +1125,10 @@ def _load_classes():
 
 USER_CLASS = _load_classes()
 
-
+def user_class(chat_id):
+    """Класс чата с защитой от удалённых/переименованных классов."""
+    c = canon_class(USER_CLASS.get(chat_id, DEFAULT_CLASS))
+    return c if c in CLASSES else DEFAULT_CLASS
 def class_save():
     if kv_enabled():
         kv_save(CLASS_KEY, {str(k): v for k, v in USER_CLASS.items()})
@@ -1079,7 +1189,7 @@ def on_setclass(call):
 def cmd_class(message):
     if not gate(message, cooldown=False):
         return
-    cur = USER_CLASS.get(message.chat.id, DEFAULT_CLASS)
+    cur = user_class(message.chat.id)
     bot.send_message(message.chat.id,
                      f"Сейчас выбран: <b>{html.escape(cur)}</b>. Выбери свой класс:",
                      parse_mode="HTML", reply_markup=class_keyboard())
@@ -1112,29 +1222,32 @@ RETRY_DELAY = 10 * 60       # пауза между попытками, секу
 
 def send_daily():
     day_index = next_school_day()
+    built = {}   # класс -> (hw_text, items, site_ok); сайт дёргаем один раз на класс
     for chat_id in broadcast_targets():
-        hw_text, items = None, []
-        for attempt in range(1, RETRY_ATTEMPTS + 1):
-            try:
-                hw_text, items = build_hw_text(day_index, USER_CLASS.get(chat_id, DEFAULT_CLASS))
-                break
-            except Exception:
-                log.exception("Рассылка: сайт недоступен (попытка %d из %d)", attempt, RETRY_ATTEMPTS)
-                if attempt < RETRY_ATTEMPTS:
-                    time.sleep(RETRY_DELAY)
-        else:
+        cname = user_class(chat_id)
+        if cname not in built:
+            hw_text, items, site_ok = None, [], False
+            for attempt in range(1, RETRY_ATTEMPTS + 1):
+                try:
+                    hw_text, items = build_hw_text(day_index, cname)
+                    site_ok = True
+                    break
+                except Exception:
+                    log.exception("Рассылка: сайт недоступен (попытка %d из %d)", attempt, RETRY_ATTEMPTS)
+                    if attempt < RETRY_ATTEMPTS:
+                        time.sleep(RETRY_DELAY)
+            built[cname] = (hw_text, items, site_ok)
+        hw_text, items, site_ok = built[cname]
+        if not site_ok:
             try:
                 bot.send_message(chat_id, "⚠️ Сайт школы сейчас недоступен, домашку получить не удалось. "
                                           "Попробуй позже командой /hw.")
             except Exception:
                 log.exception("Рассылка: не удалось отправить уведомление в чат %s", chat_id)
             continue
-
         if not hw_text:
-            log.info("Рассылка: чат %s (класс %s): заданий нет",
-                     chat_id, USER_CLASS.get(chat_id, DEFAULT_CLASS))
+            log.info("Рассылка: чат %s (класс %s): заданий нет", chat_id, cname)
             continue
-
         chunks = split_message(hw_text)
         try:
             markup = hw_markup(items, "del_one")
@@ -1212,11 +1325,14 @@ def process(chat_id, reply_to, uid, name, mode, subject, task, media):
         if subject == "none":
             subject, general = None, True
         elif subject == "auto":
-            subject = auto_detect(task)
-            if subject:
-                auto_note = f"📚 Предмет: {subject}\n\n"
+            if user_class(chat_id) in CLASSES_WITHOUT_BOOKS:
+                general = True  # у класса нет наших учебников - отвечаем без них
             else:
-                general = True
+                subject = auto_detect(task)
+                if subject:
+                    auto_note = f"📚 Предмет: {subject}\n\n"
+                else:
+                    general = True
 
         if general:
             context, pages = "", []
@@ -1272,6 +1388,110 @@ def process(chat_id, reply_to, uid, name, mode, subject, task, media):
 def parse_json(raw):
     raw = re.sub(r"^```(?:json)?|```$", "", raw.strip(), flags=re.M).strip()
     return json.loads(raw)
+# ===========================================================================
+# /setschedule - расписание класса без правок кода (хранится в Redis)
+# ===========================================================================
+@bot.message_handler(commands=["setschedule"])
+def cmd_setschedule(message):
+    if message.from_user.id != ADMIN_ID:
+        bot.reply_to(message, "Команда только для админа.")
+        return
+    parts = message.text.split(maxsplit=2)
+    cname_raw = parts[1] if len(parts) >= 2 else ""
+    text = parts[2].strip() if len(parts) >= 3 else ""
+    if not text and message.reply_to_message and message.reply_to_message.text:
+        text = message.reply_to_message.text
+    if not cname_raw:
+        bot.reply_to(message, "Так: /setschedule 6-В <текст расписания>\n"
+                              "Или reply на сообщение с расписанием: /setschedule 6-В")
+        return
+    cname = canon_class(cname_raw)
+    if cname not in CLASSES:
+        bot.reply_to(message, f"Класса {html.escape(cname)} нет. Список: /class. "
+                              f"Добавить: /addclass 6-Г <ID>")
+        return
+    if text.lower() in ("сброс", "удалить", "delete"):
+        SCHEDULES.pop(cname, None)
+        if kv_enabled():
+            store = kv_load("hwbot:schedules", {})
+            store.pop(cname, None)
+            kv_save("hwbot:schedules", store)
+        bot.reply_to(message, f"Расписание {cname} удалено — класс перейдёт в режим "
+                              "«все свежие задания с сайта».")
+        return
+    if not text:
+        bot.reply_to(message, "Не вижу текст расписания: пришли его в команде или reply на сообщение.")
+        return
+    status = bot.reply_to(message, "Разбираю расписание и сверяю с сайтом... ⏱️")
+    site_list = site_subjects(cname)
+    prompt = (
+        "Ниже — расписание уроков, присланное текстом (может быть неаккуратным), "
+        "и точный список названий предметов со школьного сайта.\n"
+        "Составь расписание по дням ПН-ПТ. Каждому предмету подбери НАИБОЛЕЕ БЛИЗКОЕ "
+        "название из списка сайта (сокращения раскрывай: «Фіз. виховання» = «Фізична "
+        "культура», «Укр літ.» = «Українська література»). Если предмет не похож ни на "
+        "один из списка — оставь как есть. Повторяющийся в один день предмет пиши один раз. "
+        'Верни ТОЛЬКО JSON: {"0": ["предмет", ...], "1": [...], "2": [...], "3": [...], "4": [...]}, '
+        "где 0=ПН, 1=ВТ, 2=СР, 3=ЧТ, 4=ПТ.\n\n"
+        f"Названия с сайта: {'; '.join(site_list) if site_list else '(сайт недоступен)'}\n\n"
+        f"Расписание:\n{text[:3000]}"
+    )
+    raw = call_gemini(prompt, json_mode=True, temperature=0.0)
+    if not raw:
+        bot.edit_message_text("ИИ сейчас недоступен, попробуй позже.",
+                              message.chat.id, status.message_id)
+        return
+    try:
+        sched_raw = parse_json(raw)
+    except Exception:
+        bot.edit_message_text("Не получилось разобрать расписание, пришли текст аккуратнее.",
+                              message.chat.id, status.message_id)
+        return
+    sched = {}
+    for i in range(5):
+        day = sched_raw.get(str(i))
+        if isinstance(day, list):
+            items = [str(s).strip()[:40] for s in day if str(s).strip()]
+            if items:
+                sched[str(i)] = items[:12]
+    if not sched:
+        bot.edit_message_text("В тексте не нашлось предметов по дням. Проверь и пришли ещё раз.",
+                              message.chat.id, status.message_id)
+        return
+    SCHEDULES[cname] = sched
+    if kv_enabled():
+        store = kv_load("hwbot:schedules", {})
+        store[cname] = sched
+        kv_save("hwbot:schedules", store)
+    else:
+        _SCHED_MEM[cname] = sched
+    names = ["ПН", "ВТ", "СР", "ЧТ", "ПТ"]
+    show = "\n\n".join(f"<b>{names[i]}</b>: " + (", ".join(sched.get(str(i), [])) or "—")
+                       for i in range(5))
+    warn = ("\n\n⚠️ Сайт был недоступен — проверь названия: если они не как на сайте, "
+            "фильтр «на завтра» может работать неточно.") if not site_list else ""
+    bot.edit_message_text(f"✅ Расписание {html.escape(cname)} сохранено "
+                          f"(переживёт перезапуск):\n\n{show}{warn}",
+                          message.chat.id, status.message_id, parse_mode="HTML")
+
+
+@bot.message_handler(commands=["addclass"])
+def cmd_addclass(message):
+    if message.from_user.id != ADMIN_ID:
+        bot.reply_to(message, "Команда только для админа.")
+        return
+    parts = message.text.split()
+    if len(parts) != 3 or not parts[2].isdigit():
+        bot.reply_to(message, "Так: /addclass 6-Г 27\n(ID — внутренний номер класса на сайте)")
+        return
+    name = canon_class(parts[1])
+    CLASSES[name] = parts[2]
+    if kv_enabled():
+        extras = kv_load("hwbot:extra_classes", {})
+        extras[name] = parts[2]
+        kv_save("hwbot:extra_classes", extras)
+    bot.reply_to(message, f"✅ Класс {name} добавлен (ID {parts[2]}). "
+                          "Дальше: /setschedule для расписания, /class — для выбора.")
 
 
 def run_quiz(message, subject, topic):
@@ -1390,8 +1610,22 @@ def cmd_id(message):
 
 @bot.message_handler(commands=["subjects"])
 def cmd_subjects(message):
-    if gate(message, cooldown=False):
-        bot.send_message(message.chat.id, "Доступные предметы:\n" + "\n".join(f"• {s}" for s in SUBJECTS))
+    if not gate(message, cooldown=False):
+        return
+    cname = user_class(message.chat.id)
+    keys = SUBJECT_KEYS_BY_CLASS.get(cname, SUBJECT_KEYS)
+    if not keys:
+        bot.send_message(
+            message.chat.id,
+            f"📚 Для {html.escape(cname)} учебники пока не подключены — и это не мешает:\n"
+            "• пришли <b>фото задания</b> — решу и объясню\n"
+            "• или напиши вопрос текстом\n"
+            "• работают /hw, /cards, /quiz, /exam, /formulas\n\n"
+            "Чтобы я решал точнее по программе — просто кинь фото страницы с заданием.",
+            parse_mode="HTML")
+        return
+    bot.send_message(message.chat.id, f"Доступные предметы ({html.escape(cname)}):\n"
+                                      + "\n".join(f"• {s}" for s in SUBJECTS))
 
 
 @bot.message_handler(commands=["subject"])
@@ -1407,6 +1641,10 @@ def cmd_subject(message):
     key = resolve_subject(args[1])
     if not key:
         bot.reply_to(message, "Не знаю такой предмет. Список: /subjects")
+        return
+    if user_class(message.chat.id) in CLASSES_WITHOUT_BOOKS:
+        bot.reply_to(message, "Для твоего класса учебники не подключены, выбирать предмет не нужно — "
+                              "просто пришли фото задания или напиши вопрос.")
         return
     settings[uid]["subject"] = key
     bot.reply_to(message, f"Предмет выбран: {key}. Теперь можно писать задания без названия предмета.")
@@ -2426,6 +2664,7 @@ if __name__ == "__main__":
             tg.BotCommand("help", "Как пользоваться"),
             tg.BotCommand("schedule", "Расписание уроков"),
             tg.BotCommand("class", "Выбрать класс"),
+            tg.BotCommand("setschedule", "Залить расписание класса"),
             tg.BotCommand("subscribe", "Домашка каждый день в 16:00"),
             tg.BotCommand("unsubscribe", "Отключить рассылку"),
             tg.BotCommand("subjects", "Список предметов"),
