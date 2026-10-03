@@ -1,6 +1,6 @@
 pyTelegramBotAPI
 google-genai
 pypdf
-fonttools
-requests
 beautifulsoup4
+requests
+tzdata
