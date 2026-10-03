@@ -157,6 +157,8 @@ try:
         tg.BotCommand("remind", "Напоминание о контрольной"),
         tg.BotCommand("pomodoro", "Таймер учёбы"),
         tg.BotCommand("help", "Справка"),
+        tg.BotCommand("exam", "Пробная контрольная"),
+        tg.BotCommand("formulas", "Тренажёр формул"),
     ])
 except Exception:
     log.warning("Не удалось установить меню команд")
@@ -1325,6 +1327,8 @@ HELP_TEXT = (
     "/summary [предмет] тема — шпаргалка для повторения\n"
     "/quiz [предмет] [тема] — тест из 5 вопросов\n"
     "/top — рейтинг класса 🏆\n"
+    "/exam [предмет] [тема] — пробная контрольная 📝\n"
+    "/formulas [предмет] — тренажёр формул 🧮\n"
     "/cards [предмет] [тема] — карточки для запоминания 🃏\n"
     "/cards — повторить накопившиеся карточки\n"
     "/proofread [текст] — проверить орфографию ✍️\n"
@@ -1973,6 +1977,290 @@ def _question_of_the_day():
             bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=kb)
         except Exception:
             log.exception("Вопрос дня: не отправилось в %s", chat_id)
+# ===========================================================================
+# /exam - пробная контрольная
+# ===========================================================================
+EXAM_QCOUNT = 5
+EXAM = {}   # uid -> {"items", "answers", "pos", "chat", "subject"}
+
+
+@bot.message_handler(commands=["exam"])
+def cmd_exam(message):
+    if not gate(message):
+        return
+    uid = message.from_user.id
+    args = message.text.split(maxsplit=2)
+    if len(args) > 1 and args[1].lower() in ("стоп", "stop"):
+        if EXAM.pop(uid, None):
+            bot.reply_to(message, "Экзамен прерван. Начать заново: /exam физика")
+        else:
+            bot.reply_to(message, "Экзамен и не шёл. Начать: /exam физика")
+        return
+    if uid in FORMULA:
+        bot.reply_to(message, "Сначала закончи тренажёр формул (/formulas стоп).")
+        return
+    if uid in EXAM:
+        bot.reply_to(message, "Экзамен уже идёт — отвечай на текущий вопрос или /exam стоп.")
+        return
+    subject = resolve_subject(args[1]) if len(args) > 1 else settings[uid].get("subject")
+    if not subject:
+        bot.reply_to(message, "Укажи предмет: /exam физика [тема]")
+        return
+    topic = args[2].strip() if len(args) > 2 else ""
+    if limit_reached(uid):
+        bot.reply_to(message, f"Дневной лимит ({DAILY_LIMIT} запросов) исчерпан.")
+        return
+    path = book_path(subject)
+    if not path:
+        bot.reply_to(message, f"Файл учебника «{SUBJECTS[subject]}» не найден.")
+        return
+    status = bot.reply_to(message, "Составляю вариант контрольной... ⏱️")
+    bot.send_chat_action(message.chat.id, "typing")
+    try:
+        if topic:
+            context, _ = find_context(path, topic)
+        else:
+            pages = [p for p in load_pages(path) if len(p) > 400]
+            context = "\n\n".join(random.sample(pages, min(3, len(pages)))) if pages else ""
+        prompt = (
+            f"На основе фрагментов учебника составь контрольную из {EXAM_QCOUNT} заданий "
+            "уровня 8 класса с КОРОТКИМИ ответами (число, слово, формула или 1 предложение). "
+            'Верни ТОЛЬКО JSON-массив вида [{"q": "текст задания", "a": "короткий эталонный ответ"}]. '
+            "Задания на языке учебника, разной сложности, без HTML.\n\n"
+            f"Фрагменты:\n{context or '(нет)'}"
+        )
+        raw = call_gemini(prompt, json_mode=True, temperature=0.5)
+        if not raw:
+            bot.edit_message_text("ИИ сейчас недоступен, попробуй позже.",
+                                  message.chat.id, status.message_id)
+            return
+        items = [it for it in parse_json(raw) if it.get("q") and it.get("a")][:EXAM_QCOUNT]
+        if len(items) < 3:
+            bot.edit_message_text("Не получилось составить вариант, попробуй ещё раз.",
+                                  message.chat.id, status.message_id)
+            return
+        EXAM[uid] = {"items": items, "answers": [], "pos": 0,
+                     "chat": message.chat.id, "subject": subject}
+        register_use(uid, message.from_user.first_name)
+        bot.delete_message(message.chat.id, status.message_id)
+        _exam_ask(uid)
+    except Exception:
+        log.exception("Ошибка /exam")
+        try:
+            bot.edit_message_text("Произошла ошибка. Попробуй ещё раз.",
+                                  message.chat.id, status.message_id)
+        except Exception:
+            pass
+
+
+def _exam_ask(uid):
+    s = EXAM.get(uid)
+    if not s:
+        return
+    q = s["items"][s["pos"]]["q"]
+    text = (f"📝 <b>Контрольная</b> ({html.escape(s['subject'])}) · "
+            f"задание {s['pos'] + 1} из {len(s['items'])}\n\n"
+            f"{html.escape(str(q))}\n\n"
+            "<i>Ответ напиши следующим сообщением. Прервать: /exam стоп</i>")
+    bot.send_message(s["chat"], text, parse_mode="HTML")
+
+
+@bot.message_handler(func=lambda m: m.from_user.id in EXAM
+                     and not m.text.startswith("/")
+                     and m.chat.id == EXAM[m.from_user.id]["chat"],
+                     content_types=["text"])
+def on_exam_answer(message):
+    uid = message.from_user.id
+    s = EXAM[uid]
+    s["answers"].append(message.text.strip()[:500])
+    s["pos"] += 1
+    if s["pos"] < len(s["items"]):
+        _exam_ask(uid)
+        return
+    # все ответы собраны - одна проверка на все задания
+    bot.send_chat_action(s["chat"], "typing")
+    status = bot.send_message(s["chat"], "Проверяю работу... ⏱️")
+    qa = "\n\n".join(
+        f"{i + 1}. Задание: {it['q']}\nЭталон: {it['a']}\nОтвет ученика: {a or '(нет ответа)'}"
+        for i, (it, a) in enumerate(zip(s["items"], s["answers"])))
+    prompt = (
+        "Проверь контрольную ученика. По каждому заданию поставь балл от 0 до 2 "
+        "(0 - неверно, 1 - частично верно, 2 - верно; засчитывай ответы, совпадающие "
+        "по смыслу, даже если формулировка другая). Верни ТОЛЬКО JSON: "
+        '[{"n": 1, "score": 2, "comment": "краткий комментарий до 100 символов"}].\n\n' + qa)
+    raw = call_gemini(prompt, json_mode=True, temperature=0.1)
+    EXAM.pop(uid, None)
+    if not raw:
+        bot.edit_message_text("ИИ сейчас недоступен — работа не проверена. "
+                              "Попробуй позже ещё раз: /exam",
+                              s["chat"], status.message_id)
+        return
+    try:
+        grades = parse_json(raw)
+    except Exception:
+        grades = []
+    earned, lines = 0, []
+    for g in grades[:len(s["items"])]:
+        try:
+            sc = max(0, min(2, int(g.get("score", 0))))
+        except Exception:
+            sc = 0
+        earned += sc
+        lines.append(f"{'✅' if sc == 2 else '🟡' if sc == 1 else '❌'} "
+                     f"Задание {g.get('n', len(lines) + 1)}: {sc}/2 — "
+                     f"{html.escape(str(g.get('comment', '')))}")
+    while len(lines) < len(s["items"]):
+        lines.append(f"❌ Задание {len(lines) + 1}: 0/2 — не проверено")
+    mx = 2 * len(s["items"])
+    grade = max(1, min(12, round((earned / mx if mx else 0) * 12)))
+    verdict = ("🎉 Отличная работа!" if grade >= 10
+               else "👍 Хорошо, но есть куда расти." if grade >= 7
+               else "📖 Материал надо повторить: /summary или /cards помогут.")
+    text = (f"📝 <b>Результат контрольной</b> ({html.escape(s['subject'])})\n\n"
+            + "\n".join(lines)
+            + f"\n\n<b>Баллы: {earned}/{mx} · Оценка: {grade}/12</b>\n{verdict}")
+    try:
+        bot.edit_message_text(text, s["chat"], status.message_id, parse_mode="HTML")
+    except Exception:
+        bot.send_message(s["chat"], text, parse_mode="HTML")
+
+
+# ===========================================================================
+# /formulas - тренажёр формул
+# ===========================================================================
+FORMULA_ROUNDS = 5
+FORMULA = {}   # uid -> {"items", "pos", "right", "chat", "subject"}
+
+
+@bot.message_handler(commands=["formulas"])
+def cmd_formulas(message):
+    if not gate(message):
+        return
+    uid = message.from_user.id
+    args = message.text.split(maxsplit=2)
+    if len(args) > 1 and args[1].lower() in ("стоп", "stop"):
+        if FORMULA.pop(uid, None):
+            bot.reply_to(message, "Тренажёр остановлен.")
+        else:
+            bot.reply_to(message, "Тренажёр и не шёл. Начать: /formulas физика")
+        return
+    if uid in EXAM:
+        bot.reply_to(message, "Сначала закончи контрольную (/exam стоп).")
+        return
+    subject = resolve_subject(args[1]) if len(args) > 1 else settings[uid].get("subject")
+    if not subject:
+        bot.reply_to(message, "Укажи предмет: /formulas физика [тема]")
+        return
+    topic = args[2].strip() if len(args) > 2 else ""
+    if limit_reached(uid):
+        bot.reply_to(message, f"Дневной лимит ({DAILY_LIMIT} запросов) исчерпан.")
+        return
+    path = book_path(subject)
+    if not path:
+        bot.reply_to(message, f"Файл учебника «{SUBJECTS[subject]}» не найден.")
+        return
+    status = bot.reply_to(message, "Выбираю формулы... ⏱️")
+    bot.send_chat_action(message.chat.id, "typing")
+    try:
+        if topic:
+            context, _ = find_context(path, topic)
+        else:
+            pages = [p for p in load_pages(path) if len(p) > 400]
+            context = "\n\n".join(random.sample(pages, min(3, len(pages)))) if pages else ""
+        prompt = (
+            f"На основе фрагментов учебника выбери {FORMULA_ROUNDS} формул или правил "
+            "уровня 8 класса. Верни ТОЛЬКО JSON-массив вида "
+            '[{"term": "название величины или правила", "formula": "сама формула текстом"}]. '
+            "Без HTML.\n\n"
+            f"Фрагменты:\n{context or '(нет)'}"
+        )
+        raw = call_gemini(prompt, json_mode=True, temperature=0.5)
+        if not raw:
+            bot.edit_message_text("ИИ сейчас недоступен, попробуй позже.",
+                                  message.chat.id, status.message_id)
+            return
+        items = [it for it in parse_json(raw) if it.get("term") and it.get("formula")][:FORMULA_ROUNDS]
+        if len(items) < 3:
+            bot.edit_message_text("Не получилось собрать формулы, попробуй ещё раз.",
+                                  message.chat.id, status.message_id)
+            return
+        FORMULA[uid] = {"items": items, "pos": 0, "right": 0,
+                        "chat": message.chat.id, "subject": subject}
+        register_use(uid, message.from_user.first_name)
+        bot.delete_message(message.chat.id, status.message_id)
+        _formula_ask(uid)
+    except Exception:
+        log.exception("Ошибка /formulas")
+        try:
+            bot.edit_message_text("Произошла ошибка. Попробуй ещё раз.",
+                                  message.chat.id, status.message_id)
+        except Exception:
+            pass
+
+
+def _formula_ask(uid):
+    f = FORMULA.get(uid)
+    if not f:
+        return
+    it = f["items"][f["pos"]]
+    text = (f"🧮 <b>Тренажёр формул</b> ({html.escape(f['subject'])}) · "
+            f"{f['pos'] + 1}/{len(f['items'])} · верно: {f['right']}\n\n"
+            f"Напиши формулу: <b>{html.escape(str(it['term']))}</b>\n\n"
+            "<i>Любой записью: E=mv²/2 или E = m*v^2/2. Выйти: /formulas стоп</i>")
+    bot.send_message(f["chat"], text, parse_mode="HTML")
+
+
+@bot.message_handler(func=lambda m: m.from_user.id in FORMULA
+                     and not m.text.startswith("/")
+                     and m.chat.id == FORMULA[m.from_user.id]["chat"],
+                     content_types=["text"])
+def on_formula_answer(message):
+    uid = message.from_user.id
+    f = FORMULA[uid]
+    it = f["items"][f["pos"]]
+    status = bot.reply_to(message, "Проверяю... ⏱️")
+    prompt = (
+        f"Величина: {it['term']}\nЭталонная формула: {it['formula']}\n"
+        f"Ответ ученика: {message.text[:200]}\n\n"
+        "Формулы считаются равными, если совпадает смысл (разные обозначения и форма "
+        'записи допустимы). Верни ТОЛЬКО JSON: '
+        '{"match": true/false, "correct": "правильная формула текстом"}')
+    raw = call_gemini(prompt, json_mode=True, temperature=0.0)
+    ok, correct = False, str(it["formula"])
+    if raw:
+        try:
+            res = parse_json(raw)
+            ok = bool(res.get("match"))
+            if res.get("correct"):
+                correct = str(res["correct"])
+        except Exception:
+            pass
+    f["pos"] += 1
+    if raw:
+        if ok:
+            f["right"] += 1
+            mark = "✅ Верно!"
+        else:
+            mark = f"❌ Не то. Правильно: <b>{html.escape(correct)}</b>"
+        try:
+            bot.edit_message_text(mark, message.chat.id, status.message_id, parse_mode="HTML")
+            bot.delete_message(message.chat.id, message.message_id)
+        except Exception:
+            pass
+    else:
+        try:
+            bot.edit_message_text("ИИ недоступен, раунд пропущен.",
+                                  message.chat.id, status.message_id)
+        except Exception:
+            pass
+    if f["pos"] < len(f["items"]):
+        _formula_ask(uid)
+    else:
+        FORMULA.pop(uid, None)
+        r, n = f["right"], len(f["items"])
+        bot.send_message(f["chat"], f"🏁 Итог: {r} из {n}. "
+                         + ("💪 Отлично!" if r == n else "Ещё заход: /formulas"))
+
 def _mode_command(mode, usage):
     def handler(message):
         if not gate(message):
@@ -2131,6 +2419,50 @@ if __name__ == "__main__":
     threading.Thread(target=broadcast_loop, daemon=True).start()
     threading.Thread(target=daily_loop, daemon=True).start()
     log.info("Бот запущен. Модели: %s | ключей Gemini: %d", ", ".join(MODELS), len(API_KEYS))
+    # ===========================================================================
+    # Инлайн-режим: @имя_бота вопрос - в любом чате
+    # ===========================================================================
+    INLINE_CACHE = {}
+    _last_inline_gen = {}
+
+
+    @bot.inline_handler(func=lambda q: len(q.query.strip()) >= 10)
+    def on_inline(query):
+        uid = query.from_user.id
+        if ALLOWED_IDS and uid not in ALLOWED_IDS and uid != ADMIN_ID:
+            bot.answer_inline_query(query.id, [], cache_time=1)
+            return
+        q = query.query.strip()
+        key = q.lower()
+        hit = INLINE_CACHE.get(key)
+        if hit and time.time() - hit[0] < 1800:
+            title, text = hit[1]
+        else:
+            if time.time() - _last_inline_gen.get(uid, 0) < 2:  # не чаще раза в 2 сек
+                bot.answer_inline_query(query.id, [], cache_time=0)
+                return
+            _last_inline_gen[uid] = time.time()
+            if limit_reached(uid):
+                bot.answer_inline_query(query.id, [], cache_time=1)
+                return
+            answer = call_gemini([f"Ответь кратко (до 100 слов) на вопрос ученика:\n{q[:500]}"],
+                                 system_instruction=SYSTEM_BASE, temperature=0.2)
+            if not answer:
+                bot.answer_inline_query(query.id, [], cache_time=1)
+                return
+            register_use(uid, query.from_user.first_name)
+            text = sanitize_html(answer)
+            title = q[:64]
+            INLINE_CACHE[key] = (time.time(), (title, text))
+            _trim(INLINE_CACHE, 200)
+        try:
+            art = tg.InlineQueryResultArticle(
+                query.id, title,
+                tg.InputTextMessageContent(text, parse_mode="HTML"),
+                description="Ответ ИИ · нажми, чтобы отправить в чат")
+            bot.answer_inline_query(query.id, [art], cache_time=10)
+        except Exception:
+            log.exception("Ошибка inline")
     while True:
         try:
             bot.infinity_polling(skip_pending=True)
