@@ -272,6 +272,7 @@ HW_DONE = {}           # token -> {номера выполненных зада�
 # ===========================================================================
 KV_URL = os.environ.get("UPSTASH_REDIS_REST_URL", "").rstrip("/")
 KV_TOKEN = os.environ.get("UPSTASH_REDIS_REST_TOKEN", "")
+log.info("Redis (Upstash): %s", "подключён" if (KV_URL and KV_TOKEN) else "НЕ подключён — расписания/статистика только в памяти!")
 _kv_skip_save = set()  # ключи, которые не удалось прочитать: их не перезаписываем, чтобы не стереть данные
 
 
@@ -1405,6 +1406,11 @@ def cmd_setschedule(message):
         bot.reply_to(message, "Так: /setschedule 6-В <текст расписания>\n"
                               "Или reply на сообщение с расписанием: /setschedule 6-В")
         return
+    if cname_raw.lower() in ("список", "list"):
+        mode = "Redis — переживёт перезапуск" if kv_enabled() else "ПАМЯТЬ (Redis не подключён — пропадёт при перезапуске!)"
+        bot.reply_to(message, f"Залито расписаний: {len(SCHEDULES)} · хранилище: {mode}\n"
+                              + (", ".join(sorted(SCHEDULES)) or "пусто"))
+        return
     cname = canon_class(cname_raw)
     if cname not in CLASSES:
         bot.reply_to(message, f"Класса {html.escape(cname)} нет. Список: /class. "
@@ -1470,8 +1476,8 @@ def cmd_setschedule(message):
                        for i in range(5))
     warn = ("\n\n⚠️ Сайт был недоступен — проверь названия: если они не как на сайте, "
             "фильтр «на завтра» может работать неточно.") if not site_list else ""
-    bot.edit_message_text(f"✅ Расписание {html.escape(cname)} сохранено "
-                          f"(переживёт перезапуск):\n\n{show}{warn}",
+    how = "в Redis — переживёт перезапуск" if kv_enabled() else "в ПАМЯТЬ — Redis не подключён, пропадёт при перезапуске!"
+    bot.edit_message_text(f"✅ Расписание {html.escape(cname)} сохранено {how}:\n\n{show}{warn}",
                           message.chat.id, status.message_id, parse_mode="HTML")
 
 
@@ -2611,7 +2617,9 @@ def on_text(message):
         close = get_close_matches(cmd, ["hw", "quiz", "explain", "check", "summary", "essay",
                                         "schedule", "subjects", "subject", "top", "stats",
                                         "short", "detail", "normal", "quick", "reset",
-                                        "subscribe", "unsubscribe", "help"], n=1, cutoff=0.6)
+                                        "subscribe", "unsubscribe", "help", "class", "cards",
+                                        "proofread", "remind", "pomodoro", "exam", "formulas",
+                                        "id"], n=1, cutoff=0.6)
         hint = f" Может, ты имел в виду /{close[0]}?" if close else ""
         bot.reply_to(message, f"Не знаю такую команду.{hint}\nСписок: /help")
         return
@@ -2658,32 +2666,6 @@ def run_web():
 # ===========================================================================
 if __name__ == "__main__":
     threading.Thread(target=run_web, daemon=True).start()
-
-    try:
-        bot.set_my_commands([
-            tg.BotCommand("help", "Как пользоваться"),
-            tg.BotCommand("schedule", "Расписание уроков"),
-            tg.BotCommand("class", "Выбрать класс"),
-            tg.BotCommand("setschedule", "Залить расписание класса"),
-            tg.BotCommand("subscribe", "Домашка каждый день в 16:00"),
-            tg.BotCommand("unsubscribe", "Отключить рассылку"),
-            tg.BotCommand("subjects", "Список предметов"),
-            tg.BotCommand("subject", "Выбрать предмет"),
-            tg.BotCommand("explain", "Объяснить, как решать"),
-            tg.BotCommand("check", "Проверить моё решение"),
-            tg.BotCommand("summary", "Шпаргалка по теме"),
-            tg.BotCommand("quiz", "Тест из 5 вопросов"),
-            tg.BotCommand("short", "Короткие ответы"),
-            tg.BotCommand("detail", "Подробные ответы"),
-            tg.BotCommand("reset", "Очистить память диалога"),
-            tg.BotCommand("stats", "Статистика"),
-            tg.BotCommand("hw", "Домашка на день"),
-            tg.BotCommand("quick", "Только короткие ответы"),
-            tg.BotCommand("essay", "Написать сочинение"),
-        ])
-    except Exception:
-        log.warning("Не удалось установить меню команд")
-
     threading.Thread(target=preload_books, daemon=True).start()
     threading.Thread(target=broadcast_loop, daemon=True).start()
     threading.Thread(target=daily_loop, daemon=True).start()
