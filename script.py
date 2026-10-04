@@ -538,7 +538,13 @@ def score_pages(pdf_path, task, use_numbers=True):
     scored = []
     for i, counts in enumerate(index):
         score = sum(min(counts[s], 5) for s in query)
-        score += 8 * sum(1 for n in numbers if n in pages[i])
+        page = pages[i]
+        for n in numbers:
+            # "56." или "56)" в начале строки учебника = номер задачи, самый сильный сигнал
+            if re.fullmatch(r"\d{1,3}", n) and re.search(r"(?m)^\s*" + n + r"\s*[.)]", page):
+                score += 12
+            elif n.replace(",", ".") in page:
+                score += 8
         if score > 0:
             scored.append((score, i))
     scored.sort(reverse=True)
