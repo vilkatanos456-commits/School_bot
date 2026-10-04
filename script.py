@@ -245,7 +245,49 @@ def on_similar(call):
                                   call.message.chat.id, status.message_id)
         except Exception:
             pass
-
+@bot.callback_query_handler(func=lambda call: call.data.startswith("rw:"))
+def on_rewrite(call):
+    """Кнопка «✍️ Своими словами»: переписать ответ живым языком школьника."""
+    uid = call.from_user.id
+    if ALLOWED_IDS and uid not in ALLOWED_IDS and uid != ADMIN_ID:
+        bot.answer_callback_query(call.id, "Нет доступа.", show_alert=True)
+        return
+    if limit_reached(uid):
+        bot.answer_callback_query(call.id, "Дневной лимит исчерпан.", show_alert=True)
+        return
+    data = REWRITE_CACHE.get(call.data.split(":", 1)[1])
+    if not data:
+        bot.answer_callback_query(call.id, "Кнопка устарела, спроси заново.")
+        return
+    task, answer = data
+    bot.answer_callback_query(call.id, "Переписываю...")
+    status = bot.send_message(call.message.chat.id, "Переписываю своими словами... ⏱️")
+    bot.send_chat_action(call.message.chat.id, "typing")
+    try:
+        prompt = (
+            "Вот задание ученика и готовое решение:\n\n"
+            f"ЗАДАНИЕ:\n{task}\n\nРЕШЕНИЕ:\n{answer}\n\n"
+            "Перепиши решение КАК БЫ ЕГО ЗАПИСАЛ САМ ВОСЬМИКЛАССНИК в тетради: "
+            "простые живые фразы без канцелярита и ИИ-подачач («данное решение», "
+            "«таким образом», «итак, давайте разберёмся» - исключить). Те же факты и тот же "
+            "ответ, но короче на треть, разговорным школьным стилем, можно от первого лица "
+            "(«сначала находим…», «получается что…»). Формулы оставь. "
+            "Без HTML, обычный текст."
+        )
+        answer2 = call_gemini([prompt], system_instruction=SYSTEM_BASE, temperature=0.6)
+        if not answer2:
+            bot.edit_message_text("ИИ сейчас недоступен, попробуй позже.",
+                                  call.message.chat.id, status.message_id)
+            return
+        register_use(uid, call.from_user.first_name)
+        send_answer(call.message.chat.id, status, answer2)
+    except Exception:
+        log.exception("Ошибка переписывания")
+        try:
+            bot.edit_message_text("Произошла ошибка, попробуй ещё раз.",
+                                  call.message.chat.id, status.message_id)
+        except Exception:
+            pass
 # ===========================================================================
 # Состояние пользователей
 # ===========================================================================
@@ -266,6 +308,7 @@ FB_LOG = []            # даты всех 👎 — для ежедневног�
 REMINDS_MEM = []       # напоминания, если Redis не подключён
 POMODORO = {}          # uid -> таймеры помидорки
 HW_DONE = {}           # token -> {номера выполненных заданий}
+REWRITE_CACHE = {}     # token -> (задание, полный ответ) для кнопки «Своими словами»
 
 # ===========================================================================
 # Статистика и лимиты
@@ -398,6 +441,9 @@ def send_answer(chat_id, status_msg, text, uid=None, task=None, subject=None):
             SIM_CACHE[token] = (subject, task[:500])
             _trim(SIM_CACHE, 100)
             markup.add(InlineKeyboardButton("🔁 Похожая задача", callback_data=f"similar:{token}"))
+            REWRITE_CACHE[token] = (task[:1500], text[:2500])
+            _trim(REWRITE_CACHE, 100)
+            markup.add(InlineKeyboardButton("✍️ Своими словами", callback_data=f"rw:{token}"))
         markup.row(InlineKeyboardButton("👍", callback_data=f"fb:ok:{token}"),
                    InlineKeyboardButton("👎", callback_data=f"fb:bad:{token}"))
     markup.add(InlineKeyboardButton("🗑", callback_data="delete_msg"))
@@ -1583,6 +1629,7 @@ HELP_TEXT = (
     "/summary [предмет] тема — шпаргалка для повторения\n"
     "/quiz [предмет] [тема] — тест из 5 вопросов\n"
     "/top — рейтинг класса 🏆\n"
+    "Под ответом: 🔁 похожая задача · ✍️ своими словами · 👍/👎\n"
     "/exam [предмет] [тема] — пробная контрольная 📝\n"
     "/formulas [предмет] — тренажёр формул 🧮\n"
     "/cards [предмет] [тема] — карточки для запоминания 🃏\n"
