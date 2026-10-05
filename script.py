@@ -9,7 +9,9 @@ import random
 import re
 import threading
 import time
+from functools import lru_cache
 from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from bs4 import BeautifulSoup
 from datetime import datetime, timezone, timedelta
 
@@ -50,7 +52,6 @@ ADMIN_ID = int(os.environ.get("ADMIN_ID", "0") or 0)
 DAILY_LIMIT = int(os.environ.get("DAILY_LIMIT", "40"))
 TOP_PAGES = int(os.environ.get("TOP_PAGES", "2"))
 
-print("Длина токена:", len(TELEGRAM_TOKEN), "| двоеточие:", ":" in TELEGRAM_TOKEN)
 if ":" not in TELEGRAM_TOKEN:
     raise SystemExit("Не задан TELEGRAM_TOKEN (переменная окружения) или он неверный.")
 if not API_KEYS:
@@ -64,8 +65,11 @@ os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 MAX_CONTEXT_CHARS = 20000
-COOLDOWN_SECONDS = 4
+COOLDOWN_SECONDS = float(os.environ.get("COOLDOWN_SECONDS", "1.2"))
 TG_LIMIT = 4000
+BOT_THREADS = int(os.environ.get("BOT_THREADS", "24"))
+PRELOAD_WORKERS = int(os.environ.get("PRELOAD_WORKERS", "4"))
+HTTP_TIMEOUT = float(os.environ.get("HTTP_TIMEOUT", "8"))
 HISTORY_TURNS = 4
 MAX_VOICE_SECONDS = 90
 
@@ -142,8 +146,9 @@ MODE_INSTR = {
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logging.getLogger("pypdf").setLevel(logging.ERROR)
 log = logging.getLogger("homework_bot")
+log.info("Конфигурация токена Telegram загружена")
 
-bot = telebot.TeleBot(TELEGRAM_TOKEN, threaded=True)
+bot = telebot.TeleBot(TELEGRAM_TOKEN, threaded=True, num_threads=BOT_THREADS)
 try:
     bot.set_my_commands([
         tg.BotCommand("hw", "Домашка с сайта школы"),
@@ -301,7 +306,16 @@ def on_rewrite(call):
 settings = defaultdict(lambda: {"length": "normal", "subject": None})
 history = defaultdict(list)       # uid -> [(вопрос, ответ), ...]
 pending = {}                      # uid -> отложенный запрос (ждём выбор предмета)
-ANSWER_CACHE = {}   # готовые ответы: одинаковые вопросы не тратят лимит и квоту Gemini
+ANSWER_CACHE = {}
+ANSWER_CACHE_LOCK = threading.RLock()
+_INFLIGHT = {}
+_INFLIGHT_LOCK = threading.Lock()
+_AUTO_CACHE = {}
+_AUTO_CACHE_LOCK = threading.Lock()
+_CONTEXT_CACHE = {}
+_CONTEXT_CACHE_LOCK = threading.Lock()
+_CACHE_MAX = int(os.environ.get("ANSWER_CACHE_MAX", "1200"))
+_CONTEXT_CACHE_MAX = int(os.environ.get("CONTEXT_CACHE_MAX", "1500"))
 FB_CACHE = {}       # отзывы по кнопкам 👍/👎
 SIM_CACHE = {}      # для кнопки «🔁 Похожая задача»
 
@@ -331,7 +345,7 @@ def kv_enabled():
 
 
 def _kv(cmd):
-    r = requests.post(KV_URL, headers={"Authorization": f"Bearer {KV_TOKEN}"}, json=cmd, timeout=8)
+    r = requests.post(KV_URL, headers={"Authorization": f"Bearer {KV_TOKEN}"}, json=cmd, timeout=3)
     r.raise_for_status()
     return r.json().get("result")
 
@@ -373,21 +387,49 @@ def _load_stats():
 
 
 stats = _load_stats()
+_stats_dirty = False
+_stats_last_flush = 0.0
+_STATS_FLUSH_SECONDS = 15
+
+def _flush_stats(force=False):
+    global _stats_dirty, _stats_last_flush
+    now = time.time()
+    if not _stats_dirty or (not force and now - _stats_last_flush < _STATS_FLUSH_SECONDS):
+        return
+    snapshot = None
+    with _stats_lock:
+        if not _stats_dirty:
+            return
+        snapshot = json.loads(json.dumps(stats, ensure_ascii=False))
+        _stats_dirty = False
+        _stats_last_flush = now
+    try:
+        if kv_enabled():
+            kv_save("hwbot:stats", snapshot)
+        else:
+            tmp = STATS_FILE + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(snapshot, f, ensure_ascii=False, indent=1)
+            os.replace(tmp, STATS_FILE)
+    except Exception:
+        with _stats_lock:
+            _stats_dirty = True
+        log.exception("Не удалось сохранить статистику")
+
 def register_use(uid, name):
+    global _stats_dirty
     today = datetime.now(KYIV).date().isoformat()
     with _stats_lock:
-        u = stats["users"].setdefault(str(uid), {"name": name, "total": 0, "days": {}})
+        u = stats["users"].setdefault(
+            str(uid), {"name": name, "total": 0, "days": {}}
+        )
         u["name"] = name
         u["total"] += 1
         u["days"][today] = u["days"].get(today, 0) + 1
-        if kv_enabled():
-            kv_save("hwbot:stats", stats)
-        else:
-            try:
-                with open(STATS_FILE, "w", encoding="utf-8") as f:
-                    json.dump(stats, f, ensure_ascii=False, indent=1)
-            except Exception:
-                log.exception("Не удалось сохранить статистику")
+        _stats_dirty = True
+    # Запись в Redis/диск никогда не тормозит ответ ученику.
+    if time.time() - _stats_last_flush >= _STATS_FLUSH_SECONDS:
+        threading.Thread(target=_flush_stats, daemon=True).start()
 
 
 def used_today(uid):
@@ -480,6 +522,7 @@ def send_answer(chat_id, status_msg, text, uid=None, task=None, subject=None):
 _pages_cache = {}
 _index_cache = {}
 _load_lock = threading.Lock()
+_index_lock = threading.Lock()
 
 
 def load_pages(pdf_path):
@@ -493,13 +536,15 @@ def load_pages(pdf_path):
 
         name = os.path.basename(pdf_path)
         cache_file = os.path.join(CACHE_DIR, hashlib.md5(name.encode("utf-8")).hexdigest() + ".json")
-        size = os.path.getsize(pdf_path)
+        stat = os.stat(pdf_path)
+        size = stat.st_size
+        mtime_ns = stat.st_mtime_ns
 
         if os.path.exists(cache_file):
             try:
                 with open(cache_file, encoding="utf-8") as f:
                     d = json.load(f)
-                if d.get("size") == size:
+                if d.get("size") == size and d.get("mtime_ns") == mtime_ns:
                     _pages_cache[pdf_path] = tuple(d["pages"])
                     return _pages_cache[pdf_path]
             except Exception:
@@ -516,7 +561,7 @@ def load_pages(pdf_path):
         pages = tuple(pages)
         try:
             with open(cache_file, "w", encoding="utf-8") as f:
-                json.dump({"size": size, "pages": list(pages)}, f, ensure_ascii=False)
+                json.dump({"size": size, "mtime_ns": mtime_ns, "pages": list(pages)}, f, ensure_ascii=False)
         except Exception:
             log.warning("Не удалось сохранить кэш для %s", name)
 
@@ -524,15 +569,27 @@ def load_pages(pdf_path):
         return pages
 
 
+@lru_cache(maxsize=8192)
+def normalize_task(text):
+    return re.sub(r"\s+", " ", (text or "").strip().casefold())
+
+
+@lru_cache(maxsize=8192)
 def stems(text):
     """Грубая основа слова (первые 5 букв) - помогает с падежами."""
-    return [w[:5] for w in re.findall(r"[a-zа-яёіїєґ0-9]{3,}", text.lower())]
+    return tuple(w[:5] for w in re.findall(r"[a-zа-яёіїєґ0-9]{3,}", text.lower()))
 
 
 def page_index(pdf_path):
-    if pdf_path not in _index_cache:
-        _index_cache[pdf_path] = [Counter(stems(p)) for p in load_pages(pdf_path)]
-    return _index_cache[pdf_path]
+    idx = _index_cache.get(pdf_path)
+    if idx is not None:
+        return idx
+    with _index_lock:
+        idx = _index_cache.get(pdf_path)
+        if idx is None:
+            idx = [Counter(stems(p)) for p in load_pages(pdf_path)]
+            _index_cache[pdf_path] = idx
+    return idx
 
 
 def score_pages(pdf_path, task, use_numbers=True):
@@ -557,7 +614,11 @@ def score_pages(pdf_path, task, use_numbers=True):
 
 
 def find_context(pdf_path, task):
-    """Возвращает (текст страниц, номера страниц PDF)."""
+    key = (pdf_path, normalize_task(task), TOP_PAGES, MAX_CONTEXT_CHARS)
+    with _CONTEXT_CACHE_LOCK:
+        hit = _CONTEXT_CACHE.get(key)
+        if hit is not None:
+            return hit
     pages = load_pages(pdf_path)
     best = sorted(i for sc, i in score_pages(pdf_path, task)[:TOP_PAGES] if sc >= 10)
     chunks, used, total = [], [], 0
@@ -565,35 +626,58 @@ def find_context(pdf_path, task):
         chunk = f"[Страница {i + 1}]\n{pages[i]}"
         if total + len(chunk) > MAX_CONTEXT_CHARS:
             break
-        chunks.append(chunk)
-        used.append(i + 1)
-        total += len(chunk)
-    return "\n\n".join(chunks), used
+        chunks.append(chunk); used.append(i + 1); total += len(chunk)
+    result = ("\n\n".join(chunks), used)
+    with _CONTEXT_CACHE_LOCK:
+        if len(_CONTEXT_CACHE) >= _CONTEXT_CACHE_MAX:
+            _CONTEXT_CACHE.pop(next(iter(_CONTEXT_CACHE)), None)
+        _CONTEXT_CACHE[key] = result
+    return result
 
 
 def auto_detect(task):
-    """Определяет предмет по тексту задания."""
+    key = normalize_task(task)
+    with _AUTO_CACHE_LOCK:
+        if key in _AUTO_CACHE:
+            return _AUTO_CACHE[key]
     best, best_score = None, 0
-    for key, fname in SUBJECTS.items():
+    for key_name, fname in SUBJECTS.items():
         path = os.path.join(BOOKS_DIR, fname)
         if not os.path.exists(path):
             continue
-        s = sum(sc for sc, _ in score_pages(path, task, use_numbers=False)[:3])
-        if s > best_score:
-            best, best_score = key, s
-    return best if best_score >= 10 else None
+        score = sum(sc for sc, _ in score_pages(path, task, use_numbers=False)[:3])
+        if score > best_score:
+            best, best_score = key_name, score
+    result = best if best_score >= 10 else None
+    with _AUTO_CACHE_LOCK:
+        if len(_AUTO_CACHE) >= 2000:
+            _AUTO_CACHE.pop(next(iter(_AUTO_CACHE)), None)
+        _AUTO_CACHE[key] = result
+    return result
+
+
+def _preload_one(item):
+    key, fname = item
+    path = os.path.join(BOOKS_DIR, fname)
+    if not os.path.exists(path):
+        return key, 0, 0.0, False
+    t = time.perf_counter()
+    n = len(load_pages(path))
+    # Сразу строим индекс, чтобы первый пользователь не платил за его создание.
+    page_index(path)
+    return key, n, time.perf_counter() - t, True
 
 
 def preload_books():
-    """Фоновая загрузка всех учебников при старте."""
-    for key, fname in SUBJECTS.items():
-        path = os.path.join(BOOKS_DIR, fname)
-        if os.path.exists(path):
-            t = time.time()
-            n = len(load_pages(path))
-            log.info("Учебник '%s' готов: %d стр., %.1f сек", key, n, time.time() - t)
-        else:
-            log.warning("Файл не найден: %s", path)
+    """Параллельно прогревает PDF и индексы при старте, не блокируя polling."""
+    items = list(SUBJECTS.items())
+    workers = max(1, min(PRELOAD_WORKERS, len(items)))
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="pdf-preload") as pool:
+        for key, n, elapsed, ok in pool.map(_preload_one, items):
+            if ok:
+                log.info("Учебник '%s' готов: %d стр., %.1f сек", key, n, elapsed)
+            else:
+                log.warning("Файл не найден: %s", os.path.join(BOOKS_DIR, SUBJECTS[key]))
 
 
 # ===========================================================================
@@ -601,10 +685,22 @@ def preload_books():
 # ===========================================================================
 _key_blocked = {}   # ключ -> время, до которого он считается исчерпанным
 _key_lock = threading.Lock()
+_clients = {}
+_clients_lock = threading.Lock()
+GEMINI_RETRIES = int(os.environ.get("GEMINI_RETRIES", "1"))
 
+def _get_client(api_key):
+    client = _clients.get(api_key)
+    if client is not None:
+        return client
+    with _clients_lock:
+        client = _clients.get(api_key)
+        if client is None:
+            client = genai.Client(api_key=api_key)
+            _clients[api_key] = client
+    return client
 
 def ordered_keys():
-    """Свободные ключи в случайном порядке (нагрузка делится поровну), затем заблокированные."""
     now = time.time()
     with _key_lock:
         ready = [k for k in API_KEYS if _key_blocked.get(k, 0) <= now]
@@ -612,9 +708,12 @@ def ordered_keys():
     random.shuffle(ready)
     return ready + blocked
 
-
 def call_gemini(contents, system_instruction=None, json_mode=False, temperature=0.3):
-    cfg = {"temperature": temperature}
+    cfg = {
+        "temperature": temperature,
+        # Не просим модель генерировать лишнее — это уменьшает задержку.
+        "max_output_tokens": int(os.environ.get("GEMINI_MAX_OUTPUT_TOKENS", "2048")),
+    }
     if system_instruction:
         cfg["system_instruction"] = system_instruction
     if json_mode:
@@ -624,32 +723,35 @@ def call_gemini(contents, system_instruction=None, json_mode=False, temperature=
     for api_key in ordered_keys():
         idx = API_KEYS.index(api_key) + 1
         try:
-            gclient = genai.Client(api_key=api_key)
+            gclient = _get_client(api_key)
         except Exception as e:
             log.warning("Ключ #%d: ошибка инициализации: %s", idx, e)
             continue
 
         for model in MODELS:
-            for attempt in range(2):
+            for attempt in range(GEMINI_RETRIES + 1):
                 t0 = time.time()
                 try:
                     r = gclient.models.generate_content(
-                        model=model, contents=contents,
+                        model=model,
+                        contents=contents,
                         config=gt.GenerateContentConfig(**cfg),
                     )
-                    log.info("Ключ #%d, %s ответила за %.1f сек", idx, model, time.time() - t0)
+                    log.info("Ключ #%d, %s ответила за %.2f сек", idx, model, time.time() - t0)
                     return r.text or None
                 except Exception as e:
                     last_error = e
                     err = str(e)
-                    log.warning("Ключ #%d | %s: %s", idx, model, err[:200])
+                    log.warning("Ключ #%d | %s | попытка %d: %s",
+                                idx, model, attempt + 1, err[:200])
                     if "429" in err or "RESOURCE_EXHAUSTED" in err:
                         with _key_lock:
-                            _key_blocked[api_key] = time.time() + 60   # минуту не трогаем этот ключ
+                            _key_blocked[api_key] = time.time() + 30
                         break
-                    if any(code in err for code in ("400", "403", "404")):
-                        break   # неверный ключ/модель - повторять бессмысленно
-                    time.sleep(1)
+                    if any(code in err for code in ("400", "401", "403", "404")):
+                        break
+                    if attempt < GEMINI_RETRIES:
+                        time.sleep(0.35)
 
     log.error("Все ключи и модели недоступны: %s", last_error)
     return None
@@ -737,6 +839,7 @@ def gate(message, cooldown=True):
     return True
 
 
+@lru_cache(maxsize=128)
 def book_path(subject):
     path = os.path.join(BOOKS_DIR, SUBJECTS[subject])
     return path if os.path.exists(path) else None
@@ -820,9 +923,21 @@ def cmd_schedule(message):
     bot.send_message(message.chat.id, text, parse_mode="HTML")
 
 
-from concurrent.futures import ThreadPoolExecutor
+HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) homework-bot/2.0',
+    'Accept-Encoding': 'gzip, deflate',
+    'Connection': 'keep-alive',
+}
+_http_local = threading.local()
 
-HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+def http_session():
+    session = getattr(_http_local, "session", None)
+    if session is None:
+        session = requests.Session()
+        session.headers.update(HEADERS)
+        _http_local.session = session
+    return session
+
 # ===========================================================================
 # Автоматизация классов: автопоиск с сайта, /addclass, расписания из Redis
 # ===========================================================================
@@ -833,7 +948,7 @@ _SCHED_MEM = {}
 def discover_classes():
     """Тянет список классов (имя -> ID) с выпадающего списка сайта школы."""
     try:
-        r = requests.get("https://sch3.edu.vn.ua/disted", headers=HEADERS, timeout=10)
+        r = http_session().get("https://sch3.edu.vn.ua/disted", timeout=HTTP_TIMEOUT)
         r.encoding = 'utf-8'
         soup = BeautifulSoup(r.text, 'html.parser')
         found = {}
@@ -885,13 +1000,10 @@ def _merge_classes_and_schedules():
             SCHEDULES[canon_class(k)] = v
 
 
-threading.Thread(target=_merge_classes_and_schedules, daemon=True).start()
-
-
 def fetch_task_text(url):
     """Достаёт текст после заголовка 'Домашнє завдання' до новостей/подвала сайта."""
     try:
-        r = requests.get(url, headers=HEADERS, timeout=10)
+        r = http_session().get(url, timeout=HTTP_TIMEOUT)
         r.encoding = 'utf-8'
         soup = BeautifulSoup(r.text, 'html.parser')
         for t in soup(['script', 'style']):
@@ -1399,6 +1511,18 @@ def process(chat_id, reply_to, uid, name, mode, subject, task, media):
                 else:
                     general = True
 
+        cache_key = None
+        if not media:
+            cache_key = hashlib.md5(
+                f"{subject}|{mode}|{settings[uid]['length']}|{normalize_task(task)}".encode("utf-8")
+            ).hexdigest()
+            with ANSWER_CACHE_LOCK:
+                cached = ANSWER_CACHE.get(cache_key)
+            if cached is not None:
+                send_answer(chat_id, status, cached, uid=uid, task=task,
+                            subject=subject if subject and subject != "none" else None)
+                return
+
         if general:
             context, pages = "", []
         else:
@@ -1407,11 +1531,15 @@ def process(chat_id, reply_to, uid, name, mode, subject, task, media):
                 bot.edit_message_text(f"Файл учебника «{SUBJECTS[subject]}» не найден в папке «книги».",
                                       chat_id, status.message_id)
                 return
-            if not any(load_pages(path)):
-                bot.edit_message_text("Не удалось извлечь текст из PDF (возможно, это скан без текстового слоя).",
-                                      chat_id, status.message_id)
-                return
-            context, pages = find_context(path, task)
+            pages = load_pages(path)
+            if not any(pages):
+                log.warning("Учебник без текстового слоя (скан): %s", path)
+                general = True
+                context, pages = "", []
+                auto_note += (f"📌 Учебник «{SUBJECTS[subject]}» оказался сканом без текстового слоя, "
+                              "поэтому решаю по общим знаниям. Для точности пришли фото задания.\n\n")
+            else:
+                context, pages = find_context(path, task)
         prompt = build_prompt(mode, context, task, uid)
         cache_key = None
         if not media:
@@ -1423,24 +1551,49 @@ def process(chat_id, reply_to, uid, name, mode, subject, task, media):
                             uid=uid, task=task,
                             subject=subject if subject and subject != "none" else None)
                 return
-        answer = call_gemini([prompt, *media], system_instruction=build_system(uid))
-        if not answer:
-            bot.edit_message_text("Сейчас ИИ перегружен или недоступен. Попробуй ещё раз через минуту.",
-                                  chat_id, status.message_id)
-            return
-
-        register_use(uid, name)
-        if subject:
-            settings[uid]["subject"] = subject
-        history[uid].append((task, answer))
-        history[uid] = history[uid][-HISTORY_TURNS:]
-
-        quick = settings[uid]["length"] == "quick"
-        footer = f"\n\n📖 Использованы страницы PDF: {', '.join(map(str, pages))}" if pages and not quick else ""
-        full_text = auto_note + answer + footer
+        flight = None
+        leader = True
         if cache_key:
-            ANSWER_CACHE[cache_key] = full_text
-            _trim(ANSWER_CACHE)
+            with _INFLIGHT_LOCK:
+                flight = _INFLIGHT.get(cache_key)
+                if flight is None:
+                    flight = {"event": threading.Event(), "answer": None, "error": None}
+                    _INFLIGHT[cache_key] = flight
+                else:
+                    leader = False
+            if not leader:
+                flight["event"].wait(timeout=float(os.environ.get("INFLIGHT_TIMEOUT", "45")))
+                if flight["answer"] is not None:
+                    send_answer(chat_id, status, flight["answer"], uid=uid, task=task,
+                                subject=subject if subject and subject != "none" else None)
+                    return
+                if flight["error"] is not None:
+                    raise flight["error"]
+
+        try:
+            answer = call_gemini(prompt, system_instruction=build_system(uid), temperature=0.25)
+            if not answer:
+                raise RuntimeError("Gemini вернул пустой ответ")
+        except Exception as exc:
+            if cache_key and leader:
+                with _INFLIGHT_LOCK:
+                    item = _INFLIGHT.pop(cache_key, None)
+                    if item:
+                        item["error"] = exc
+                        item["event"].set()
+            raise
+        full_text = auto_note + answer
+        if cache_key:
+            with ANSWER_CACHE_LOCK:
+                ANSWER_CACHE[cache_key] = full_text
+                while len(ANSWER_CACHE) > _CACHE_MAX:
+                    ANSWER_CACHE.pop(next(iter(ANSWER_CACHE)), None)
+            if leader:
+                with _INFLIGHT_LOCK:
+                    item = _INFLIGHT.pop(cache_key, None)
+                    if item:
+                        item["answer"] = full_text
+                        item["event"].set()
         send_answer(chat_id, status, full_text, uid=uid, task=task,
                     subject=subject if subject and subject != "none" else None)
 
@@ -2190,6 +2343,7 @@ def daily_loop():
             _check_reminds()
             _daily_admin_report()
             _question_of_the_day()
+            _flush_stats()
         except Exception:
             log.exception("Ошибка daily_loop")
         time.sleep(300)
@@ -2784,4 +2938,4 @@ if __name__ == "__main__":
             bot.infinity_polling(skip_pending=True)
         except Exception:
             log.exception("Polling упал, перезапуск через 10 сек")
-            time.sleep(10)
+            time.sleep(3)
