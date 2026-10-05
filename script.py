@@ -35,7 +35,7 @@ from pypdf import PdfReader
 #   TELEGRAM_TOKEN   - токен от @BotFather                         (обязательно)
 #   GEMINI_API_KEYS  - ключи Gemini через запятую                  (обязательно)
 #   GEMINI_MODELS    - модели через запятую (по умолч. gemini-3.5-flash-lite)
-#   ADMIN_ID         - твой Telegram ID (без лимитов, видит статистику)
+#   ADMIN_ID         - твій Telegram ID (без лимитов, видит статистику)
 #   ALLOWED_IDS      - ID через запятую; пусто = доступ у всех
 #   DAILY_LIMIT      - запросов в сутки на пользователя (по умолч. 40)
 #   TOP_PAGES        - сколько страниц учебника отдавать модели (по умолч. 2)
@@ -53,9 +53,9 @@ DAILY_LIMIT = int(os.environ.get("DAILY_LIMIT", "40"))
 TOP_PAGES = int(os.environ.get("TOP_PAGES", "2"))
 
 if ":" not in TELEGRAM_TOKEN:
-    raise SystemExit("Не задан TELEGRAM_TOKEN (переменная окружения) или он неверный.")
+    raise SystemExit("Не задано TELEGRAM_TOKEN (змінна середовища) або він неправильний.")
 if not API_KEYS:
-    raise SystemExit("Не заданы ключи Gemini: укажи GEMINI_API_KEYS (через запятую).")
+    raise SystemExit("Не задано ключів Gemini: вкажи GEMINI_API_KEYS (через кому).")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 BOOKS_DIR = os.path.join(BASE_DIR, "книги")
@@ -87,6 +87,16 @@ SUBJECTS = {
     "химия": "хімія.pdf",
 }
 
+SUBJECT_LABELS_UA = {
+    "алгебра": "Алгебра", "биология": "Біологія", "география": "Географія",
+    "геометрия": "Геометрія", "зарубежка": "Зарубіжна література",
+    "история": "Історія", "музыка": "Музика", "укрлит": "Українська література",
+    "укрмов": "Українська мова", "физика": "Фізика", "химия": "Хімія",
+}
+
+def subject_label(subject):
+    return SUBJECT_LABELS_UA.get(subject, subject)
+
 ALIASES = {
     "фізика": "физика", "хімія": "химия", "біологія": "биология",
     "географія": "география", "геометрія": "геометрия", "історія": "история",
@@ -95,50 +105,50 @@ ALIASES = {
 }
 
 SYSTEM_BASE = (
-    "Ты умный школьный помощник. Опирайся в первую очередь на предоставленные "
-    "фрагменты учебника. Если в них нет информации, отвечай по общим знаниям. "
-    "Оформляй ответ структурированно, используя ТОЛЬКО HTML-теги Telegram: "
-    "<b>жирный</b> для главного ответа, <i>курсив</i>, <code>формулы</code>. "
-    "Другие теги и Markdown не используй. Символы < и > в формулах пиши словами "
-    "(«меньше», «больше») или как ≤ ≥. Разделяй блоки пустыми строками. "
-    "Отвечай на том языке, на котором задан вопрос."
-    "Если нужного задания во фрагментах не оказалось — НЕ отказывайся отвечать и "
-    "не рассуждай о том, чего нет в учебнике: реши по общим знаниям и правилам темы, "
-    "отметив это ОДНОЙ короткой строкой в начале: «📌 Условия в учебнике не нашлось — "
-    "решаю по правилам темы. Для точности можно прислать фото задания». Всё, дальше "
-    "только решение по обычной структуре. Никаких списков того, что есть на страницах."
+    "Ти розумний шкільний помічник. Насамперед спирайся на надані "
+    "фрагменти підручника. Якщо в них немає інформації, відповідай на основі загальних знань. "
+    "Оформлюй відповідь структуровано, використовуючи ЛИШЕ HTML-теги Telegram: "
+    "<b>жирний</b> для головної відповіді, <i>курсив</i>, <code>формули</code>. "
+    "Інші теги та Markdown не використовуй. Символи < і > у формулах пиши словами "
+    "(«менше», «більше») або як ≤ ≥. Розділяй блоки порожніми рядками. "
+    "Відповідай ЛИШЕ УКРАЇНСЬКОЮ МОВОЮ. Якщо користувач прямо просить іншу мову, використовуй її лише для цього запиту."
+    "Якщо потрібного завдання у фрагментах немає — НЕ відмовляйся відповідати й "
+    "не міркуй про те, чого немає в підручнику: розв’яжи за загальними знаннями та правилами теми, "
+    "зазначивши це ОДНИМ коротким рядком на початку: «📌 Умови в підручнику не знайдено — "
+    "розв’язую за правилами теми. Для точності можна надіслати фото завдання». Далі "
+    "лише розв’язання у звичайній структурі. Не складай списків того, що є на сторінках."
 )
 
 LENGTH_INSTR = {
     "normal": "",
-    "short": "Отвечай максимально коротко: не больше 5-6 предложений.",
-    "detail": "Отвечай подробно и развёрнуто, по шагам.",
-    "quick": ("РЕЖИМ БЫСТРЫХ ОТВЕТОВ. Дай ТОЛЬКО итоговый ответ: число, слово или вариант. "
-              "Без приветствий и пояснений. Для задачи допустима одна строка с расчётом. "
-              "На сообщения не по учёбе отвечай одним словом."),
+    "short": "Відповідай максимально коротко: не більше 5–6 речень.",
+    "detail": "Відповідай докладно й розгорнуто, покроково.",
+    "quick": ("РЕЖИМ ШВИДКИХ ВІДПОВІДЕЙ. Дай ЛИШЕ підсумкову відповідь: число, слово або варіант. "
+              "Без привітань і пояснень. Для задачі допустимий один рядок із розрахунком. "
+              "На повідомлення не про навчання відповідай одним словом."),
 }
 
 MODE_INSTR = {
-        "answer": ("Дай готовый точный ответ. Без вводных фраз и без отдельного пояснения сути, "
-               "не пиши слово «Суть». Если нужны выкладки, дай их кратко по шагам."),
+        "answer": ("Дай готову точну відповідь. Без вступних фраз і без окремого пояснення суті, "
+               "не пиши слово «Суть». Якщо потрібні обчислення, подай їх коротко за кроками."),
     "explain": (
-        "Не ограничивайся ответом: объясни пошагово, как решать такое задание, "
-        "какие правила и формулы используются и почему, чтобы ученик смог "
-        "решить похожее сам. В конце дай итоговый ответ."
+        "Не обмежуйся відповіддю: поясни покроково, як розв’язувати таке завдання, "
+        "які правила та формули використовуються і чому, щоб учень міг "
+        "самостійно розв’язати подібне. Наприкінці дай підсумкову відповідь."
     ),
     "check": (
-        "Ученик прислал своё решение или ответ. Проверь его: скажи, верно ли "
-        "оно, найди конкретные ошибки, объясни, как правильно."
+        "Учень надіслав власний розв’язок або відповідь. Перевір її: скажи, чи "
+        "вона правильна, знайди конкретні помилки та поясни, як правильно."
     ),
     "summary": (
-        "Составь краткую структурированную шпаргалку для повторения по "
-        "указанной теме: главные определения, правила, формулы, 1-2 примера. "
-        "Без воды."
+        "Склади коротку структуровану шпаргалку для повторення за "
+        "вказаною темою: головні визначення, правила, формули, 1–2 приклади. "
+        "Без зайвої води."
     ),
-    "essay": ("Напиши школьное сочинение на заданную тему для ученика 8 класса: вступление, "
-              "2-3 абзаца основной части с аргументами и примерами, вывод. Объём около 200-250 слов, "
-              "если не указано иное. Простой живой язык школьника, без канцелярита. "
-              "Для украинской мови и литературы пиши по-украински. Только текст сочинения."
+    "essay": ("Напиши шкільний твір на задану тему для учня 8 класу: вступ, "
+              "2–3 абзаци основної частини з аргументами та прикладами, висновок. Обсяг близько 200–250 слів, "
+              "якщо не вказано інше. Простою живою мовою школяра, без канцеляризмів. "
+              "Для української мови та літератури пиши українською. Лише текст твору."
 
     ),
 }
@@ -146,30 +156,30 @@ MODE_INSTR = {
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logging.getLogger("pypdf").setLevel(logging.ERROR)
 log = logging.getLogger("homework_bot")
-log.info("Конфигурация токена Telegram загружена")
+log.info("Конфігурацію токена Telegram завантажено")
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN, threaded=True, num_threads=BOT_THREADS)
 try:
     bot.set_my_commands([
-        tg.BotCommand("hw", "Домашка с сайта школы"),
-        tg.BotCommand("quiz", "Тест по теме"),
-        tg.BotCommand("explain", "Объяснить, как решать"),
-        tg.BotCommand("check", "Проверить моё решение"),
-        tg.BotCommand("summary", "Шпаргалка по теме"),
-        tg.BotCommand("essay", "Написать сочинение"),
-        tg.BotCommand("schedule", "Расписание уроков"),
-        tg.BotCommand("subject", "Выбрать предмет"),
-        tg.BotCommand("reset", "Очистить память диалога"),
+        tg.BotCommand("hw", "Домашнє завдання із сайту школи"),
+        tg.BotCommand("quiz", "Тест за темою"),
+        tg.BotCommand("explain", "Пояснити, як розв’язувати"),
+        tg.BotCommand("check", "Перевірити мій розв’язок"),
+        tg.BotCommand("summary", "Шпаргалка за темою"),
+        tg.BotCommand("essay", "Написати твір"),
+        tg.BotCommand("schedule", "Розклад уроків"),
+        tg.BotCommand("subject", "Обрати предмет"),
+        tg.BotCommand("reset", "Очистити пам’ять діалогу"),
         tg.BotCommand("stats", "Моя статистика"),
-        tg.BotCommand("top", "Рейтинг класса"),
-        tg.BotCommand("cards", "Карточки для запоминания"),
-        tg.BotCommand("proofread", "Проверить орфографию"),
-        tg.BotCommand("remind", "Напоминание о контрольной"),
-        tg.BotCommand("pomodoro", "Таймер учёбы"),
-        tg.BotCommand("class", "Выбрать класс"),
-        tg.BotCommand("help", "Справка"),
-        tg.BotCommand("exam", "Пробная контрольная"),
-        tg.BotCommand("formulas", "Тренажёр формул"),
+        tg.BotCommand("top", "Рейтинг класу"),
+        tg.BotCommand("cards", "Картки для запам’ятовування"),
+        tg.BotCommand("proofread", "Перевірити орфографію"),
+        tg.BotCommand("remind", "Нагадування про контрольну"),
+        tg.BotCommand("pomodoro", "Таймер навчання"),
+        tg.BotCommand("class", "Обрати клас"),
+        tg.BotCommand("help", "Довідка"),
+        tg.BotCommand("exam", "Пробна контрольна"),
+        tg.BotCommand("formulas", "Тренажер формул"),
     ])
 except Exception:
     log.warning("Не удалось установить меню команд")
@@ -195,16 +205,16 @@ def on_feedback(call):
     if verdict == "bad":
         FB_LOG.append(datetime.now(KYIV).date().isoformat())
     try:
-        bot.answer_callback_query(call.id, "Спасибо за оценку!" if verdict == "ok" else "Учту, спасибо.")
+        bot.answer_callback_query(call.id, "Дякую за оцінку!" if verdict == "ok" else "Врахую, дякую.")
     except Exception:
         pass
     if verdict == "bad" and data and ADMIN_ID:
         try:
             bot.send_message(ADMIN_ID,
-                             f"👎 Плохой ответ (uid {data['uid']})\n\n"
-                             f"Вопрос:\n{data['task']}\n\nОтвет:\n{data['answer'][:1500]}")
+                             f"👎 Погана відповідь (uid {data['uid']})\n\n"
+                             f"Запитання:\n{data['task']}\n\nВідповідь:\n{data['answer'][:1500]}")
         except Exception:
-            log.exception("Не удалось переслать отзыв админу")
+            log.exception("Не вдалося переслати відгук адміністратору")
     try:
         kb = InlineKeyboardMarkup()
         kb.add(InlineKeyboardButton("🗑", callback_data="delete_msg"))
@@ -218,31 +228,31 @@ def on_similar(call):
     """Кнопка 🔁: придумать похожую задачу на то же правило."""
     uid = call.from_user.id
     if ALLOWED_IDS and uid not in ALLOWED_IDS and uid != ADMIN_ID:
-        bot.answer_callback_query(call.id, "Нет доступа.", show_alert=True)
+        bot.answer_callback_query(call.id, "Немає доступу.", show_alert=True)
         return
     if limit_reached(uid):
-        bot.answer_callback_query(call.id, "Дневной лимит исчерпан.", show_alert=True)
+        bot.answer_callback_query(call.id, "Денний ліміт вичерпано.", show_alert=True)
         return
     data = SIM_CACHE.get(call.data.split(":", 1)[1])
     if not data:
-        bot.answer_callback_query(call.id, "Кнопка устарела, спроси заново.")
+        bot.answer_callback_query(call.id, "Кнопка застаріла, запитай ще раз.")
         return
     subject, task = data
-    bot.answer_callback_query(call.id, "Придумываю...")
-    status = bot.send_message(call.message.chat.id, "Придумываю похожую задачу... ⏱️")
+    bot.answer_callback_query(call.id, "Придумую…")
+    status = bot.send_message(call.message.chat.id, "Придумую подібне завдання… ⏱️")
     bot.send_chat_action(call.message.chat.id, "typing")
     try:
         path = book_path(subject)
         context, _ = find_context(path, task) if path else ("", [])
         prompt = (
-            f"Фрагменты учебника:\n{context or '(нет)'}\n\n"
-            f"Задача ученика:\n{task}\n\n"
-            "Придумай ПОХОЖУЮ задачу на то же правило, но с другими числами и условием. "
-            "Сначала приведи условие новой задачи, затем строку «РЕШЕНИЕ:» и краткое решение с ответом."
+            f"Фрагменти підручника:\n{context or '(немає)'}\n\n"
+            f"Завдання учня:\n{task}\n\n"
+            "Придумай ПОДІБНЕ завдання на те саме правило, але з іншими числами та умовою. "
+            "Сначала приведи условие новой задачи, затем строку «РОЗВ’ЯЗАННЯ:» и краткое решение с ответом."
         )
         answer = call_gemini([prompt], system_instruction=SYSTEM_BASE, temperature=0.7)
         if not answer:
-            bot.edit_message_text("ИИ сейчас недоступен, попробуй позже.",
+            bot.edit_message_text("ШІ зараз недоступний, спробуй пізніше.",
                                   call.message.chat.id, status.message_id)
             return
         register_use(uid, call.from_user.first_name)
@@ -251,44 +261,44 @@ def on_similar(call):
     except Exception:
         log.exception("Ошибка похожей задачи")
         try:
-            bot.edit_message_text("Произошла ошибка, попробуй ещё раз.",
+            bot.edit_message_text("Сталася помилка, спробуй ще раз.",
                                   call.message.chat.id, status.message_id)
         except Exception:
             pass
 @bot.callback_query_handler(func=lambda call: call.data.startswith("rw:"))
 def on_rewrite(call):
-    """Кнопка «✍️ Своими словами»: переписать ответ живым языком школьника."""
+    """Кнопка «✍️ Своїми словами»: переписать ответ живым языком школьника."""
     uid = call.from_user.id
     if ALLOWED_IDS and uid not in ALLOWED_IDS and uid != ADMIN_ID:
-        bot.answer_callback_query(call.id, "Нет доступа.", show_alert=True)
+        bot.answer_callback_query(call.id, "Немає доступу.", show_alert=True)
         return
     if limit_reached(uid):
-        bot.answer_callback_query(call.id, "Дневной лимит исчерпан.", show_alert=True)
+        bot.answer_callback_query(call.id, "Денний ліміт вичерпано.", show_alert=True)
         return
     data = REWRITE_CACHE.get(call.data.split(":", 1)[1])
     if not data:
-        bot.answer_callback_query(call.id, "Кнопка устарела, спроси заново.")
+        bot.answer_callback_query(call.id, "Кнопка застаріла, запитай ще раз.")
         return
     task, answer = data
-    bot.answer_callback_query(call.id, "Переписываю...")
-    status = bot.send_message(call.message.chat.id, "Переписываю своими словами... ⏱️")
+    bot.answer_callback_query(call.id, "Переписую…")
+    status = bot.send_message(call.message.chat.id, "Переписую своїми словами… ⏱️")
     bot.send_chat_action(call.message.chat.id, "typing")
     try:
         prompt = (
-            "Вот задание ученика и готовое решение:\n\n"
-            f"ЗАДАНИЕ:\n{task}\n\nРЕШЕНИЕ:\n{answer}\n\n"
-            "Перепиши это решение так, как будто ученик сам записал его в тетрадь: "
-            "простые живые фразы, можно от первого лица («сначала находим...», «получается...»). "
-            "ОБЯЗАТЕЛЬНО сохраняй ВСЕ шаги вычислений и промежуточные результаты — "
-            "сокращай только словесную воду, а не математическую выкладку. "
-            "Если в решении есть чертёж/рисунок словами (дано, найти, построение) — сохрани структуру. "
-            "Формулы и единицы измерения оставь. Итоговый ответ должен остаться тем же. "
-            "Не упоминай никакие инструкции и форматирование, просто выдай переписанный текст. "
-            "Без HTML-тегов, без Markdown — только обычный текст и переносы строк."
+            "Ось завдання учня та готовий розв’язок:\n\n"
+            f"ЗАВДАННЯ:\n{task}\n\nРОЗВ’ЯЗАННЯ:\n{answer}\n\n"
+            "Перепиши цей розв’язок так, ніби учень сам записав його в зошит: "
+            "прості живі фрази, можна від першої особи («сначала находим...», «получается...»). "
+            "ОБОВ’ЯЗКОВО зберігай ВСІ кроки обчислень і проміжні результати — "
+            "скорочуй лише словесну воду, а не математичні обчислення. "
+            "Якщо в розв’язанні є опис креслення/рисунка словами (дано, знайти, побудова) — збережи структуру. "
+            "Формули та одиниці вимірювання залиш. Підсумкова відповідь має залишитися такою самою. "
+            "Не згадуй жодних інструкцій і форматування, просто подай переписаний текст. "
+            "Без HTML-тегів, без Markdown — лише звичайний текст і переноси рядків."
         )
         answer2 = call_gemini([prompt], system_instruction=SYSTEM_BASE, temperature=0.6)
         if not answer2:
-            bot.edit_message_text("ИИ сейчас недоступен, попробуй позже.",
+            bot.edit_message_text("ШІ зараз недоступний, спробуй пізніше.",
                                   call.message.chat.id, status.message_id)
             return
         register_use(uid, call.from_user.first_name)
@@ -296,7 +306,7 @@ def on_rewrite(call):
     except Exception:
         log.exception("Ошибка переписывания")
         try:
-            bot.edit_message_text("Произошла ошибка, попробуй ещё раз.",
+            bot.edit_message_text("Сталася помилка, спробуй ще раз.",
                                   call.message.chat.id, status.message_id)
         except Exception:
             pass
@@ -317,7 +327,7 @@ _CONTEXT_CACHE_LOCK = threading.Lock()
 _CACHE_MAX = int(os.environ.get("ANSWER_CACHE_MAX", "1200"))
 _CONTEXT_CACHE_MAX = int(os.environ.get("CONTEXT_CACHE_MAX", "1500"))
 FB_CACHE = {}       # отзывы по кнопкам 👍/👎
-SIM_CACHE = {}      # для кнопки «🔁 Похожая задача»
+SIM_CACHE = {}      # для кнопки «🔁 Подібне завдання»
 
 
 def _trim(d, limit=300):
@@ -489,10 +499,10 @@ def send_answer(chat_id, status_msg, text, uid=None, task=None, subject=None):
         if subject and task:
             SIM_CACHE[token] = (subject, task[:500])
             _trim(SIM_CACHE, 100)
-            markup.add(InlineKeyboardButton("🔁 Похожая задача", callback_data=f"similar:{token}"))
+            markup.add(InlineKeyboardButton("🔁 Подібне завдання", callback_data=f"similar:{token}"))
             REWRITE_CACHE[token] = (task[:1500], text[:2500])
             _trim(REWRITE_CACHE, 100)
-            markup.add(InlineKeyboardButton("✍️ Своими словами", callback_data=f"rw:{token}"))
+            markup.add(InlineKeyboardButton("✍️ Своїми словами", callback_data=f"rw:{token}"))
         markup.row(InlineKeyboardButton("👍", callback_data=f"fb:ok:{token}"),
                    InlineKeyboardButton("👎", callback_data=f"fb:bad:{token}"))
     markup.add(InlineKeyboardButton("🗑", callback_data="delete_msg"))
@@ -683,7 +693,7 @@ def preload_books():
 # ===========================================================================
 # Gemini (несколько ключей с ротацией)
 # ===========================================================================
-_key_blocked = {}   # ключ -> время, до которого он считается исчерпанным
+_key_blocked = {}   # ключ -> время, до которого он считается вичерпаноным
 _key_lock = threading.Lock()
 _clients = {}
 _clients_lock = threading.Lock()
@@ -761,9 +771,9 @@ def extract_task(media):
     """Достаёт текст задания из фото или голосового сообщения."""
     return call_gemini(
         [
-            "Если это изображение, дословно перепиши текст задания (формулы "
-            "символами Unicode). Если это аудио, расшифруй речь. Верни только "
-            "текст без комментариев.",
+            "Якщо це зображення, дослівно перепиши текст завдання (формули "
+            "символами Unicode). Якщо це аудіо, розшифруй мовлення. Поверни лише "
+            "текст без коментарів.",
             *media,
         ],
         temperature=0.0,
@@ -778,11 +788,11 @@ def build_prompt(mode, context, task, uid):
     hist = history_text(uid)
     mode_text = MODE_INSTR[mode]
     if settings[uid]["length"] == "quick" and mode == "answer":
-        mode_text = "Дай только итоговый ответ, без пояснений."
+        mode_text = "Дай лише підсумкову відповідь, без пояснень."
     return (
-        f"Фрагменты учебника:\n{context or '(подходящих фрагментов не найдено)'}\n\n"
-        + (f"Предыдущий диалог:\n{hist}\n\n" if hist else "")
-        + f"Твоя задача: {mode_text}\n\nСообщение ученика: {task}"
+        f"Фрагменти підручника:\n{context or '(відповідних фрагментів не знайдено)'}\n\n"
+        + (f"Попередній діалог:\n{hist}\n\n" if hist else "")
+        + f"Твоє завдання: {mode_text}\n\nПовідомлення учня: {task}"
     )
 
 
@@ -819,8 +829,8 @@ def split_subject(text):
 
 def subjects_keyboard():
     kb = tg.InlineKeyboardMarkup(row_width=3)
-    kb.add(*[tg.InlineKeyboardButton(s.capitalize(), callback_data=f"subj:{s}") for s in SUBJECTS])
-    kb.add(tg.InlineKeyboardButton("🔍 Определить автоматически", callback_data="subj:auto"))
+    kb.add(*[tg.InlineKeyboardButton(subject_label(s), callback_data=f"subj:{s}") for s in SUBJECTS])
+    kb.add(tg.InlineKeyboardButton("🔍 Визначити автоматично", callback_data="subj:auto"))
     return kb
 
 
@@ -828,12 +838,12 @@ def gate(message, cooldown=True):
     """Проверка доступа и антиспама."""
     uid = message.from_user.id
     if ALLOWED_IDS and uid not in ALLOWED_IDS and uid != ADMIN_ID:
-        bot.reply_to(message, f"У тебя нет доступа к боту. Твой ID: {uid}")
+        bot.reply_to(message, f"У тебе немає доступу до бота. Твій ID: {uid}")
         return False
     if cooldown:
         now = time.time()
         if now - last_request.get(uid, 0) < COOLDOWN_SECONDS:
-            bot.reply_to(message, "Подожди пару секунд перед следующим запросом.")
+            bot.reply_to(message, "Зачекай кілька секунд перед наступним запитом.")
             return False
         last_request[uid] = now
     return True
@@ -849,13 +859,13 @@ def book_path(subject):
 # Основной конвейер
 # ===========================================================================
 
-    # Словарь с твоим расписанием 8-Б
+    # Словник із твоїм розкладом 8-Б
 
     # ===========================================================================
-    # Расписание и обработчики домашки (ВЫНЕСЕНО ИЗ PROCESS НАВЕРХ)
+    # Розклад и обработчики домашки (ВЫНЕСЕНО ИЗ PROCESS НАВЕРХ)
     # ===========================================================================
 
-# Классы школы: имя -> ID на сайте sch3.edu.vn.ua
+# Класы школы: имя -> ID на сайте sch3.edu.vn.ua
 CLASSES = {
 "10-А": "31",
 "10-Б": "33",
@@ -901,8 +911,8 @@ def hw_menu(message):
                InlineKeyboardButton("СР", callback_data="hw_2"))
     markup.row(InlineKeyboardButton("ЧТ", callback_data="hw_3"),
                InlineKeyboardButton("ПТ", callback_data="hw_4"))
-    markup.add(InlineKeyboardButton("🗑 Закрыть", callback_data="delete_msg"))
-    bot.send_message(message.chat.id, "На какой день собрать домашку?", reply_markup=markup)
+    markup.add(InlineKeyboardButton("🗑 Закрити", callback_data="delete_msg"))
+    bot.send_message(message.chat.id, "На який день зібрати домашнє завдання?", reply_markup=markup)
 
 @bot.message_handler(commands=["schedule"])
 def cmd_schedule(message):
@@ -911,11 +921,11 @@ def cmd_schedule(message):
     class_name = user_class(message.chat.id)
     sched = SCHEDULES.get(class_name)
     if not sched:
-        bot.reply_to(message, f"Расписание для {html.escape(class_name)} пока не добавлено, "
-                              "но домашка работает: /hw")
+        bot.reply_to(message, f"Розклад для {html.escape(class_name)} поки не додано, "
+                              "але домашнє завдання працює: /hw")
         return
-    names = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница"]
-    text = f"📅 <b>Расписание {html.escape(class_name)}</b>\n\n" + "\n\n".join(
+    names = ["Понеділок", "Вівторок", "Середа", "Четвер", "П’ятниця"]
+    text = f"📅 <b>Розклад {html.escape(class_name)}</b>\n\n" + "\n\n".join(
         f"<b>{names[int(d)]}</b>\n"
         + "\n".join(f"{i}. {html.escape(s)}" for i, s in enumerate(lessons, 1))
         for d, lessons in sched.items()
@@ -1034,7 +1044,7 @@ def is_future(lesson_date):
         return d > datetime.now(KYIV).date()
     except ValueError:
         return False  # если дату не разобрать, задание не скрываем
-DAY_NAMES = ["понедельник", "вторник", "среду", "четверг", "пятницу"]
+DAY_NAMES = ["понеділок", "вівторок", "середу", "четвер", "п’ятницю"]
 
 
 def next_school_day():
@@ -1060,11 +1070,11 @@ SUBJECT_KEYS = {
     "Фізика і астрономія": "физика",
     "Хімія": "химия",
 }
-# Свои учебники по классам. Класса нет в словаре или словарь пустой = решаем без учебников.
+# Свои учебники по классам. Класу нет в словаре или словарь пустой = решаем без учебников.
 SUBJECT_KEYS_BY_CLASS = {
     "6-В": {},   # пока нет учебников за 6 класс - всё по общим знаниям
 }
-# Классы без учебников: по предметам не из mapping бот просит фото задания
+# Класы без учебников: по предметам не из mapping бот просит фото задания
 CLASSES_WITHOUT_BOOKS = {k for k, v in SUBJECT_KEYS_BY_CLASS.items() if not v}
 # Латинские буквы, похожие на кириллицу (A B C E H K M O P T X), приводим к кириллице.
 # Защита от невидимого бага: "6-В" в CLASSES и SCHEDULES набраны разными алфавитами.
@@ -1154,7 +1164,7 @@ def build_hw_text(day_index, class_name=None):
     with ThreadPoolExecutor(max_workers=6) as ex:
         texts = list(ex.map(lambda s: fetch_task_text(latest_tasks[s][1]), subs_list))
 
-    hw_text = f"📚 <b>Домашка {html.escape(class_name)} на {DAY_NAMES[int(day_index)]}:</b>\n\n"
+    hw_text = f"📚 <b>Домашнє завдання {html.escape(class_name)} на {DAY_NAMES[int(day_index)]}:</b>\n\n"
     items = []
     for subject, text in zip(subs_list, texts):
         lesson_date, task_link = latest_tasks[subject]
@@ -1179,12 +1189,12 @@ def parse_smart_hw(call):
     except Exception:
         pass
 
-    bot.edit_message_text("Сканирую сайт школы... 🕵️‍♂️", chat_id, msg_id)
+    bot.edit_message_text("Сканую сайт школи… 🕵️‍♂️", chat_id, msg_id)
 
     try:
         hw_text, items = build_hw_text(day_index, user_class(chat_id))
         if not hw_text:
-            bot.edit_message_text("На этот день свежих заданий на сайте пока нет.", chat_id, msg_id)
+            bot.edit_message_text("На цей день свіжих завдань на сайті поки немає.", chat_id, msg_id)
             return
 
         markup = hw_markup(items)
@@ -1199,24 +1209,24 @@ def parse_smart_hw(call):
                                  reply_markup=m, disable_web_page_preview=True)
     except Exception as e:
         log.exception("Ошибка в /hw")
-        bot.edit_message_text(f"Сайт недоступен. Ошибка: {e}", chat_id, msg_id)
+        bot.edit_message_text(f"Сайт недоступний. Помилка: {e}", chat_id, msg_id)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("solve:"))
 def on_solve(call):
     """Кнопка '✏️ Предмет' под домашкой: отправляет задание на решение."""
     uid = call.from_user.id
     if ALLOWED_IDS and uid not in ALLOWED_IDS and uid != ADMIN_ID:
-        bot.answer_callback_query(call.id, "Нет доступа.", show_alert=True)
+        bot.answer_callback_query(call.id, "Немає доступу.", show_alert=True)
         return
     try:
         _, token, idx = call.data.split(":")
         subject_ua, task_text = HW_CACHE[token][int(idx)]
     except Exception:
-        bot.answer_callback_query(call.id, "Список устарел, открой /hw заново.", show_alert=True)
+        bot.answer_callback_query(call.id, "Список застарів, відкрий /hw ще раз.", show_alert=True)
         return
     now = time.time()
     if now - last_request.get(uid, 0) < COOLDOWN_SECONDS:
-        bot.answer_callback_query(call.id, "Подожди пару секунд.")
+        bot.answer_callback_query(call.id, "Зачекай кілька секунд.")
         return
     last_request[uid] = now
 
@@ -1227,17 +1237,17 @@ def on_solve(call):
         bot.answer_callback_query(call.id)
         bot.send_message(
             call.message.chat.id,
-            f"📸 По «{subject_ua}» у меня пока нет учебника для этого класса.\n"
-            "Пришли фото задания следующим сообщением — решу и объясню "
-            "(можно и просто текстом написать).")
+            f"📸 Для «{subject_ua}» у мене поки немає підручника для цього класу.\n"
+            "Надішли фото завдання наступним повідомленням — розв’яжу й поясню "
+            "(можна й просто написати текстом).")
         return
-    bot.answer_callback_query(call.id, "Решаю…")
-    task = f"{subject_ua}. Домашнее задание: {task_text[:1500]}"
+    bot.answer_callback_query(call.id, "Розв’язую…")
+    task = f"{subject_ua}. Домашнє завдання: {task_text[:1500]}"
     # Если в задании только номера без текста - предупредим, что условия могут не найтись
     if re.search(r"[№N]\s*№?\s*\d+|\d{1,3}\s*[,.-]\s*\d{1,3}", task_text) and len(task_text) < 120:
         bot.send_message(call.message.chat.id,
-                         f"ℹ️ В задании только номера ({subject_ua}). Если в ответе условия не хватит — "
-                         "пришли фото страницы учебника с этими номерами, решу точно.")
+                         f"ℹ️ У завданні лише номери ({subject_ua}). Якщо в умові не вистачить даних — "
+                         "надішли фото сторінки підручника з цими номерами — розв’яжу точно.")
     process(call.message.chat.id, call.message.message_id, uid,
             call.from_user.first_name, "answer", subject, task, [])
 
@@ -1249,16 +1259,16 @@ def on_hw_done(call):
         idx = int(idx)
         items = HW_CACHE[token]
     except Exception:
-        bot.answer_callback_query(call.id, "Список устарел, открой /hw заново.", show_alert=True)
+        bot.answer_callback_query(call.id, "Список застарів, відкрий /hw ще раз.", show_alert=True)
         return
     done = HW_DONE.setdefault(token, set())
     if idx in done:
         done.discard(idx)
-        msg = "Вернул в список."
+        msg = "Повернув до списку."
     else:
         done.add(idx)
         left = sum(1 for i, (s, t) in enumerate(items) if t and i not in done)
-        msg = "Всё выполнено! 🎉" if left == 0 else f"Молодец! 💪 Осталось: {left}"
+        msg = "Усе виконано! 🎉" if left == 0 else f"Молодець! 💪 Залишилося: {left}"
     try:
         bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id,
                                       reply_markup=_hw_kb(token, items))
@@ -1268,7 +1278,7 @@ def on_hw_done(call):
 
 
 # ===========================================================================
-# Ежедневная рассылка домашки
+# Ежедневная розсилка домашнього завдання
 # ===========================================================================
 SEND_HOUR, SEND_MINUTE = 16, 0          # время рассылки по Киеву
 SUBS_FILE = os.path.join(DATA_DIR, "subs.json")
@@ -1303,7 +1313,7 @@ def _load_classes():
 USER_CLASS = _load_classes()
 
 def user_class(chat_id):
-    """Класс чата с защитой от удалённых/переименованных классов."""
+    """Клас чата с защитой от удалённых/переименованных классов."""
     c = canon_class(USER_CLASS.get(chat_id, DEFAULT_CLASS))
     return c if c in CLASSES else DEFAULT_CLASS
 def class_save():
@@ -1349,14 +1359,14 @@ def class_keyboard():
 def on_setclass(call):
     name = call.data.split(":", 1)[1]
     if name not in CLASSES:
-        bot.answer_callback_query(call.id, "Такого класса нет.", show_alert=True)
+        bot.answer_callback_query(call.id, "Такого класу немає.", show_alert=True)
         return
     USER_CLASS[call.message.chat.id] = name
     class_save()
-    bot.answer_callback_query(call.id, f"Класс: {name}")
+    bot.answer_callback_query(call.id, f"Клас: {name}")
     try:
-        bot.edit_message_text(f"✅ Класс выбран: <b>{html.escape(name)}</b>\n"
-                              "Домашка: /hw · рассылка: /subscribe · сменить: /class",
+        bot.edit_message_text(f"✅ Клас обрано: <b>{html.escape(name)}</b>\n"
+                              "Домашнє завдання: /hw · розсилка: /subscribe · змінити: /class",
                               call.message.chat.id, call.message.message_id, parse_mode="HTML")
     except Exception:
         pass
@@ -1368,7 +1378,7 @@ def cmd_class(message):
         return
     cur = user_class(message.chat.id)
     bot.send_message(message.chat.id,
-                     f"Сейчас выбран: <b>{html.escape(cur)}</b>. Выбери свой класс:",
+                     f"Зараз обрано: <b>{html.escape(cur)}</b>. Обери свій клас:",
                      parse_mode="HTML", reply_markup=class_keyboard())
 
 
@@ -1379,8 +1389,8 @@ def cmd_subscribe(message):
     with _subs_lock:
         subs.add(message.chat.id)
         _save_subs()
-    bot.reply_to(message, f"Готово! Каждый учебный день в {SEND_HOUR}:{SEND_MINUTE:02d} "
-                          "буду присылать домашку на следующий день. Отписаться: /unsubscribe")
+    bot.reply_to(message, f"Готово! Кожного навчального дня в {SEND_HOUR}:{SEND_MINUTE:02d} "
+                          "надсилатиму домашнє завдання на наступний день. Відписатися: /unsubscribe")
 
 
 @bot.message_handler(commands=["unsubscribe"])
@@ -1390,7 +1400,7 @@ def cmd_unsubscribe(message):
     with _subs_lock:
         subs.discard(message.chat.id)
         _save_subs()
-    bot.reply_to(message, "Рассылка отключена.")
+    bot.reply_to(message, "Розсилку вимкнено.")
 
 
 RETRY_ATTEMPTS = 4          # сколько раз пробуем достучаться до сайта школы
@@ -1417,8 +1427,8 @@ def send_daily():
         hw_text, items, site_ok = built[cname]
         if not site_ok:
             try:
-                bot.send_message(chat_id, "⚠️ Сайт школы сейчас недоступен, домашку получить не удалось. "
-                                          "Попробуй позже командой /hw.")
+                bot.send_message(chat_id, "⚠️ Сайт школи зараз недоступний, отримати домашнє завдання не вдалося. "
+                                          "Спробуй пізніше командою /hw.")
             except Exception:
                 log.exception("Рассылка: не удалось отправить уведомление в чат %s", chat_id)
             continue
@@ -1460,7 +1470,7 @@ def on_subject_pick(call):
     uid = call.from_user.id
     req = pending.pop(uid, None)
     if not req:
-        bot.answer_callback_query(call.id, "Запрос устарел, отправь задание заново.")
+        bot.answer_callback_query(call.id, "Запит застарів, надішли завдання ще раз.")
         return
     subject = call.data.split(":", 1)[1]
     bot.answer_callback_query(call.id)
@@ -1480,11 +1490,11 @@ def dispatch(message, mode, subject, task, media):
 
 def process(chat_id, reply_to, uid, name, mode, subject, task, media):
     if limit_reached(uid):
-        bot.send_message(chat_id, f"Дневной лимит ({DAILY_LIMIT} запросов) исчерпан. Приходи завтра!",
+        bot.send_message(chat_id, f"Денний ліміт ({DAILY_LIMIT} запитів) вичерпано. Повертайся завтра!",
                          reply_to_message_id=reply_to)
         return
 
-    status = bot.send_message(chat_id, "Ищу ответ в учебнике... ⏱️", reply_to_message_id=reply_to)
+    status = bot.send_message(chat_id, "Шукаю відповідь у підручнику… ⏱️", reply_to_message_id=reply_to)
     bot.send_chat_action(chat_id, "typing")
 
     try:
@@ -1493,7 +1503,7 @@ def process(chat_id, reply_to, uid, name, mode, subject, task, media):
             if extracted:
                 task = f"{task}\n{extracted}".strip()
             elif not task:
-                bot.edit_message_text("Не удалось разобрать фото или голосовое. Попробуй ещё раз.",
+                bot.edit_message_text("Не вдалося розібрати фото або голосове повідомлення. Спробуй ще раз.",
                                       chat_id, status.message_id)
                 return
 
@@ -1528,7 +1538,7 @@ def process(chat_id, reply_to, uid, name, mode, subject, task, media):
         else:
             path = book_path(subject)
             if not path:
-                bot.edit_message_text(f"Файл учебника «{SUBJECTS[subject]}» не найден в папке «книги».",
+                bot.edit_message_text(f"Файл підручника «{SUBJECTS[subject]}» не знайдено в папці «книги».",
                                       chat_id, status.message_id)
                 return
             pages = load_pages(path)
@@ -1536,8 +1546,8 @@ def process(chat_id, reply_to, uid, name, mode, subject, task, media):
                 log.warning("Учебник без текстового слоя (скан): %s", path)
                 general = True
                 context, pages = "", []
-                auto_note += (f"📌 Учебник «{SUBJECTS[subject]}» оказался сканом без текстового слоя, "
-                              "поэтому решаю по общим знаниям. Для точности пришли фото задания.\n\n")
+                auto_note += (f"📌 Підручник «{SUBJECTS[subject]}» виявився сканом без текстового шару, "
+                              "тому розв’язую за загальними знаннями. Для точності надішли фото завдання.\n\n")
             else:
                 context, pages = find_context(path, task)
         prompt = build_prompt(mode, context, task, uid)
@@ -1600,7 +1610,7 @@ def process(chat_id, reply_to, uid, name, mode, subject, task, media):
     except Exception:
         log.exception("Ошибка обработки запроса")
         try:
-            bot.edit_message_text("Произошла ошибка. Попробуй ещё раз.", chat_id, status.message_id)
+            bot.edit_message_text("Сталася помилка. Спробуй ще раз.", chat_id, status.message_id)
         except Exception:
             pass
 def parse_json(raw):
@@ -1612,7 +1622,7 @@ def parse_json(raw):
 @bot.message_handler(commands=["setschedule"])
 def cmd_setschedule(message):
     if message.from_user.id != ADMIN_ID:
-        bot.reply_to(message, "Команда только для админа.")
+        bot.reply_to(message, "Команда лише для адміністратора.")
         return
     parts = message.text.split(maxsplit=2)
     cname_raw = parts[1] if len(parts) >= 2 else ""
@@ -1620,18 +1630,18 @@ def cmd_setschedule(message):
     if not text and message.reply_to_message and message.reply_to_message.text:
         text = message.reply_to_message.text
     if not cname_raw:
-        bot.reply_to(message, "Так: /setschedule 6-В <текст расписания>\n"
-                              "Или reply на сообщение с расписанием: /setschedule 6-В")
+        bot.reply_to(message, "Так: /setschedule 6-В <текст розкладу>\n"
+                              "Або відповідай на повідомлення з розкладом: /setschedule 6-В")
         return
     if cname_raw.lower() in ("список", "list"):
-        mode = "Redis — переживёт перезапуск" if kv_enabled() else "ПАМЯТЬ (Redis не подключён — пропадёт при перезапуске!)"
-        bot.reply_to(message, f"Залито расписаний: {len(SCHEDULES)} · хранилище: {mode}\n"
+        mode = "Redis — переживе перезапуск" if kv_enabled() else "ПАМ’ЯТЬ (Redis не підключено — дані зникнуть після перезапуску!)"
+        bot.reply_to(message, f"Завантажено розкладів: {len(SCHEDULES)} · сховище: {mode}\n"
                               + (", ".join(sorted(SCHEDULES)) or "пусто"))
         return
     cname = canon_class(cname_raw)
     if cname not in CLASSES:
-        bot.reply_to(message, f"Класса {html.escape(cname)} нет. Список: /class. "
-                              f"Добавить: /addclass 6-Г <ID>")
+        bot.reply_to(message, f"Класу {html.escape(cname)} немає. Список: /class. "
+                              f"Додати: /addclass 6-Г <ID>")
         return
     if text.lower() in ("сброс", "удалить", "delete"):
         SCHEDULES.pop(cname, None)
@@ -1639,35 +1649,35 @@ def cmd_setschedule(message):
             store = kv_load("hwbot:schedules", {})
             store.pop(cname, None)
             kv_save("hwbot:schedules", store)
-        bot.reply_to(message, f"Расписание {cname} удалено — класс перейдёт в режим "
-                              "«все свежие задания с сайта».")
+        bot.reply_to(message, f"Розклад {cname} видалено — клас перейде в режим "
+                              "«усі свіжі завдання із сайту».")
         return
     if not text:
-        bot.reply_to(message, "Не вижу текст расписания: пришли его в команде или reply на сообщение.")
+        bot.reply_to(message, "Не бачу тексту розкладу: надішли його в команді або у відповідь на повідомлення.")
         return
-    status = bot.reply_to(message, "Разбираю расписание и сверяю с сайтом... ⏱️")
+    status = bot.reply_to(message, "Розбираю розклад і звіряю із сайтом… ⏱️")
     site_list = site_subjects(cname)
     prompt = (
-        "Ниже — расписание уроков, присланное текстом (может быть неаккуратным), "
-        "и точный список названий предметов со школьного сайта.\n"
-        "Составь расписание по дням ПН-ПТ. Каждому предмету подбери НАИБОЛЕЕ БЛИЗКОЕ "
-        "название из списка сайта (сокращения раскрывай: «Фіз. виховання» = «Фізична "
-        "культура», «Укр літ.» = «Українська література»). Если предмет не похож ни на "
-        "один из списка — оставь как есть. Повторяющийся в один день предмет пиши один раз. "
-        'Верни ТОЛЬКО JSON: {"0": ["предмет", ...], "1": [...], "2": [...], "3": [...], "4": [...]}, '
-        "где 0=ПН, 1=ВТ, 2=СР, 3=ЧТ, 4=ПТ.\n\n"
-        f"Названия с сайта: {'; '.join(site_list) if site_list else '(сайт недоступен)'}\n\n"
-        f"Расписание:\n{text[:3000]}"
+        "Нижче — розклад уроків, надісланий текстом (може бути неохайним), "
+        "і точний список назв предметів зі шкільного сайту.\n"
+        "Склади розклад за днями ПН–ПТ. Кожному предмету підбери НАЙБЛИЖЧУ "
+        "назву зі списку сайту (скорочення розкривай: «Фіз. виховання» = «Фізична "
+        "культура», «Укр літ.» = «Українська література»). Якщо предмет не схожий на "
+        "жоден зі списку — залиш його як є. Предмет, що повторюється в один день, записуй один раз. "
+        'Поверни ЛИШЕ JSON: {"0": ["предмет", ...], "1": [...], "2": [...], "3": [...], "4": [...]}, '
+        "де 0=ПН, 1=ВТ, 2=СР, 3=ЧТ, 4=ПТ.\n\n"
+        f"Назви із сайту: {'; '.join(site_list) if site_list else '(сайт недоступний)'}\n\n"
+        f"Розклад:\n{text[:3000]}"
     )
     raw = call_gemini(prompt, json_mode=True, temperature=0.0)
     if not raw:
-        bot.edit_message_text("ИИ сейчас недоступен, попробуй позже.",
+        bot.edit_message_text("ШІ зараз недоступний, спробуй пізніше.",
                               message.chat.id, status.message_id)
         return
     try:
         sched_raw = parse_json(raw)
     except Exception:
-        bot.edit_message_text("Не получилось разобрать расписание, пришли текст аккуратнее.",
+        bot.edit_message_text("Не вдалося розібрати розклад, надішли текст чіткіше.",
                               message.chat.id, status.message_id)
         return
     sched = {}
@@ -1678,7 +1688,7 @@ def cmd_setschedule(message):
             if items:
                 sched[str(i)] = items[:12]
     if not sched:
-        bot.edit_message_text("В тексте не нашлось предметов по дням. Проверь и пришли ещё раз.",
+        bot.edit_message_text("У тексті не знайдено предметів за днями. Перевір і надішли ще раз.",
                               message.chat.id, status.message_id)
         return
     SCHEDULES[cname] = sched
@@ -1693,19 +1703,19 @@ def cmd_setschedule(message):
                        for i in range(5))
     warn = ("\n\n⚠️ Сайт был недоступен — проверь названия: если они не как на сайте, "
             "фильтр «на завтра» может работать неточно.") if not site_list else ""
-    how = "в Redis — переживёт перезапуск" if kv_enabled() else "в ПАМЯТЬ — Redis не подключён, пропадёт при перезапуске!"
-    bot.edit_message_text(f"✅ Расписание {html.escape(cname)} сохранено {how}:\n\n{show}{warn}",
+    how = "у Redis — переживе перезапуск" if kv_enabled() else "У ПАМ’ЯТІ — Redis не підключено, дані зникнуть після перезапуску!"
+    bot.edit_message_text(f"✅ Розклад {html.escape(cname)} збережено {how}:\n\n{show}{warn}",
                           message.chat.id, status.message_id, parse_mode="HTML")
 
 
 @bot.message_handler(commands=["addclass"])
 def cmd_addclass(message):
     if message.from_user.id != ADMIN_ID:
-        bot.reply_to(message, "Команда только для админа.")
+        bot.reply_to(message, "Команда лише для адміністратора.")
         return
     parts = message.text.split()
     if len(parts) != 3 or not parts[2].isdigit():
-        bot.reply_to(message, "Так: /addclass 6-Г 27\n(ID — внутренний номер класса на сайте)")
+        bot.reply_to(message, "Так: /addclass 6-Г 27\n(ID — внутрішній номер класу на сайті)")
         return
     name = canon_class(parts[1])
     CLASSES[name] = parts[2]
@@ -1713,22 +1723,22 @@ def cmd_addclass(message):
         extras = kv_load("hwbot:extra_classes", {})
         extras[name] = parts[2]
         kv_save("hwbot:extra_classes", extras)
-    bot.reply_to(message, f"✅ Класс {name} добавлен (ID {parts[2]}). "
-                          "Дальше: /setschedule для расписания, /class — для выбора.")
+    bot.reply_to(message, f"✅ Клас {name} додано (ID {parts[2]}). "
+                          "Далі: /setschedule для розкладу, /class — для вибору.")
 
 
 def run_quiz(message, subject, topic):
     uid = message.from_user.id
     chat_id = message.chat.id
     if limit_reached(uid):
-        bot.reply_to(message, f"Дневной лимит ({DAILY_LIMIT} запросов) исчерпан.")
+        bot.reply_to(message, f"Денний ліміт ({DAILY_LIMIT} запитів) вичерпано.")
         return
     path = book_path(subject)
     if not path:
-        bot.reply_to(message, f"Файл учебника «{SUBJECTS[subject]}» не найден.")
+        bot.reply_to(message, f"Файл підручника «{SUBJECTS[subject]}» не знайдено.")
         return
 
-    status = bot.reply_to(message, "Готовлю вопросы... ⏱️")
+    status = bot.reply_to(message, "Готую запитання… ⏱️")
     bot.send_chat_action(chat_id, "typing")
     try:
         pages = load_pages(path)
@@ -1738,19 +1748,19 @@ def run_quiz(message, subject, topic):
             rich = [p for p in pages if len(p) > 400]
             context = "\n\n".join(random.sample(rich, min(4, len(rich)))) if rich else ""
         if not context:
-            bot.edit_message_text("Не нашёл подходящих страниц по этой теме.", chat_id, status.message_id)
+            bot.edit_message_text("Не знайшов відповідних сторінок за цією темою.", chat_id, status.message_id)
             return
 
         prompt = (
-            "На основе фрагментов учебника составь 5 тестовых вопросов с 4 вариантами ответа "
-            "(ровно один верный). Верни ТОЛЬКО JSON-массив вида "
-            '[{"q": "вопрос", "options": ["a","b","c","d"], "correct": 0, "explain": "пояснение до 150 символов"}]. '
-            "Вопросы пиши на языке учебника. Не используй HTML.\n\n"
-            f"Фрагменты:\n{context}"
+            "На основі фрагментів підручника склади 5 тестових запитань із 4 варіантами відповіді "
+            "(рівно один правильний). Поверни ЛИШЕ JSON-масив такого вигляду "
+            '[{"q": "запитання", "options": ["a","b","c","d"], "correct": 0, "explain": "пояснення до 150 символів"}]. '
+            "Запитання пиши українською. Не використовуй HTML.\n\n"
+            f"Фрагменти:\n{context}"
         )
         raw = call_gemini(prompt, json_mode=True, temperature=0.5)
         if not raw:
-            bot.edit_message_text("ИИ сейчас недоступен. Попробуй позже.", chat_id, status.message_id)
+            bot.edit_message_text("ШІ зараз недоступний. Спробуй пізніше.", chat_id, status.message_id)
             return
 
         items = parse_json(raw)
@@ -1774,46 +1784,46 @@ def run_quiz(message, subject, topic):
         if sent:
             bot.delete_message(chat_id, status.message_id)
         else:
-            bot.edit_message_text("Не получилось составить тест, попробуй ещё раз.", chat_id, status.message_id)
+            bot.edit_message_text("Не вдалося скласти тест, спробуй ще раз.", chat_id, status.message_id)
     except Exception:
         log.exception("Ошибка теста")
-        bot.edit_message_text("Произошла ошибка при создании теста.", chat_id, status.message_id)
+        bot.edit_message_text("Сталася помилка під час створення тесту.", chat_id, status.message_id)
 
 
 # ===========================================================================
-# Команды
+# Команди
 # ===========================================================================
 HELP_TEXT = (
-    "<b>Как пользоваться</b>\n"
-    "Пиши: <code>физика задача 3.5</code> — или просто текст задания (предмет запомнится).\n"
-    "Можно прислать <b>фото</b>, <b>голосовое</b> или <b>PDF-файл</b> от учителя.\n"
-    "Чтобы спросить по PDF — пришли файл с подписью: «объясни», «реши задание 3».\n\n"
-    "<b>Команды</b>\n"
-    "/hw — домашка с сайта школы (есть «На завтра»)\n"
-    "/subscribe, /unsubscribe — рассылка домашки в 16:00\n"
-    "/schedule — расписание уроков\n"
-    "/class — выбрать свой класс 🏫\n"
-    "/subjects — список предметов\n"
-    "/subject физика — выбрать текущий предмет\n"
-    "/explain [предмет] задание — объяснить, КАК решать\n"
-    "/check [предмет] решение — проверить твоё решение (можно фото с подписью /check)\n"
-    "/summary [предмет] тема — шпаргалка для повторения\n"
-    "/quiz [предмет] [тема] — тест из 5 вопросов\n"
-    "/top — рейтинг класса 🏆\n"
-    "Под ответом: 🔁 похожая задача · ✍️ своими словами · 👍/👎\n"
-    "/exam [предмет] [тема] — пробная контрольная 📝\n"
-    "/formulas [предмет] — тренажёр формул 🧮\n"
-    "/cards [предмет] [тема] — карточки для запоминания 🃏\n"
-    "/cards — повторить накопившиеся карточки\n"
-    "/proofread [текст] — проверить орфографию ✍️\n"
-    "/remind 20.05 контрольная — напоминание ⏰\n"
-    "/pomodoro 25 — таймер учёба/перерыв 🍅\n"
-    "/short, /detail, /normal — длина ответов\n"
-    "/essay [предмет] тема — написать сочинение\n"
-    "/quick — режим только коротких ответов (выйти: /normal)\n"
-    "/reset — очистить память диалога\n"
+    "<b>Як користуватися</b>\n"
+    "Пиши: <code>фізика задача 3.5</code> — або просто текст завдання (предмет запам’ятається).\n"
+    "Можна надіслати <b>фото</b>, <b>голосове повідомлення</b> або <b>PDF-файл</b> від учителя.\n"
+    "Щоб запитати про PDF — надішли файл із підписом: «поясни», «розв’яжи завдання 3».\n\n"
+    "<b>Команди</b>\n"
+    "/hw — домашнє завдання із сайту школи (є «На завтра»)\n"
+    "/subscribe, /unsubscribe — розсилка домашнього завдання о 16:00\n"
+    "/schedule — розклад уроків\n"
+    "/class — обрати свій клас 🏫\n"
+    "/subjects — список предметів\n"
+    "/subject фізика — обрати поточний предмет\n"
+    "/explain [предмет] завдання — пояснити, ЯК розв’язувати\n"
+    "/check [предмет] розв’язок — перевірити твій розв’язок (можна фото з підписом /check)\n"
+    "/summary [предмет] тема — шпаргалка для повторення\n"
+    "/quiz [предмет] [тема] — тест із 5 запитань\n"
+    "/top — рейтинг класу 🏆\n"
+    "Під відповіддю: 🔁 подібне завдання · ✍️ своїми словами · 👍/👎\n"
+    "/exam [предмет] [тема] — пробна контрольна 📝\n"
+    "/formulas [предмет] — тренажер формул 🧮\n"
+    "/cards [предмет] [тема] — картки для запам’ятовування 🃏\n"
+    "/cards — повторити накопичені картки\n"
+    "/proofread [текст] — перевірити орфографію ✍️\n"
+    "/remind 20.05 контрольна — нагадування ⏰\n"
+    "/pomodoro 25 — таймер навчання/перерви 🍅\n"
+    "/short, /detail, /normal — довжина відповідей\n"
+    "/essay [предмет] тема — написати твір\n"
+    "/quick — режим лише коротких відповідей (вийти: /normal)\n"
+    "/reset — очистити пам’ять діалогу\n"
     "/stats — твоя статистика\n"
-    "/id — твой Telegram ID"
+    "/id — твій Telegram ID"
 )
 
 
@@ -1823,13 +1833,13 @@ def cmd_help(message):
         bot.send_message(message.chat.id, HELP_TEXT, parse_mode="HTML")
         if message.text.strip().startswith("/start") and message.chat.id not in USER_CLASS:
             bot.send_message(message.chat.id,
-                             "И выбери свой класс, чтобы домашка собиралась правильно:",
+                             "І обери свій клас, щоб домашнє завдання збиралося правильно:",
                              reply_markup=class_keyboard())
 
 
 @bot.message_handler(commands=["id"])
 def cmd_id(message):
-    bot.reply_to(message, f"Твой Telegram ID: {message.from_user.id}")
+    bot.reply_to(message, f"Твій Telegram ID: {message.from_user.id}")
 
 
 @bot.message_handler(commands=["subjects"])
@@ -1841,14 +1851,14 @@ def cmd_subjects(message):
     if not keys:
         bot.send_message(
             message.chat.id,
-            f"📚 Для {html.escape(cname)} учебники пока не подключены — и это не мешает:\n"
-            "• пришли <b>фото задания</b> — решу и объясню\n"
-            "• или напиши вопрос текстом\n"
-            "• работают /hw, /cards, /quiz, /exam, /formulas\n\n"
-            "Чтобы я решал точнее по программе — просто кинь фото страницы с заданием.",
+            f"📚 Для {html.escape(cname)} підручники поки не підключено — і це не заважає:\n"
+            "• надішли <b>фото завдання</b> — розв’яжу й поясню\n"
+            "• або напиши запитання текстом\n"
+            "• працюють /hw, /cards, /quiz, /exam, /formulas\n\n"
+            "Щоб я розв’язував точніше за програмою — просто надішли фото сторінки із завданням.",
             parse_mode="HTML")
         return
-    bot.send_message(message.chat.id, f"Доступные предметы ({html.escape(cname)}):\n"
+    bot.send_message(message.chat.id, f"Доступні предмети ({html.escape(cname)}):\n"
                                       + "\n".join(f"• {s}" for s in SUBJECTS))
 
 
@@ -1860,18 +1870,18 @@ def cmd_subject(message):
     args = message.text.split(maxsplit=1)
     if len(args) < 2:
         cur = settings[uid]["subject"]
-        bot.reply_to(message, f"Текущий предмет: {cur or 'не выбран'}. Сменить: /subject физика")
+        bot.reply_to(message, f"Поточний предмет: {cur or 'не обрано'}. Змінити: /subject фізика")
         return
     key = resolve_subject(args[1])
     if not key:
-        bot.reply_to(message, "Не знаю такой предмет. Список: /subjects")
+        bot.reply_to(message, "Не знаю такого предмета. Список: /subjects")
         return
     if user_class(message.chat.id) in CLASSES_WITHOUT_BOOKS:
-        bot.reply_to(message, "Для твоего класса учебники не подключены, выбирать предмет не нужно — "
-                              "просто пришли фото задания или напиши вопрос.")
+        bot.reply_to(message, "Для твого класу підручники не підключено, обирати предмет не потрібно — "
+                              "просто надішли фото завдання або напиши запитання.")
         return
     settings[uid]["subject"] = key
-    bot.reply_to(message, f"Предмет выбран: {key}. Теперь можно писать задания без названия предмета.")
+    bot.reply_to(message, f"Предмет обрано: {subject_label(key)}. Тепер можна писати завдання без назви предмета.")
 
 
 def _set_length(message, value, text):
@@ -1882,29 +1892,29 @@ def _set_length(message, value, text):
 
 @bot.message_handler(commands=["short"])
 def cmd_short(message):
-    _set_length(message, "short", "Режим: короткие ответы.")
+    _set_length(message, "short", "Режим: короткі відповіді.")
 
 
 @bot.message_handler(commands=["detail"])
 def cmd_detail(message):
-    _set_length(message, "detail", "Режим: подробные ответы.")
+    _set_length(message, "detail", "Режим: докладні відповіді.")
 
 
 @bot.message_handler(commands=["normal"])
 def cmd_normal(message):
-    _set_length(message, "normal", "Режим: обычные ответы.")
+    _set_length(message, "normal", "Режим: звичайні відповіді.")
 
 
 @bot.message_handler(commands=["quick"])
 def cmd_quick(message):
-    _set_length(message, "quick", "Режим: только короткие ответы. Выйти: /normal")
+    _set_length(message, "quick", "Режим: лише короткі відповіді. Вийти: /normal")
 
 
 @bot.message_handler(commands=["reset"])
 def cmd_reset(message):
     if gate(message, cooldown=False):
         history[message.from_user.id].clear()
-        bot.reply_to(message, "Память диалога очищена.")
+        bot.reply_to(message, "Пам’ять діалогу очищено.")
 
 
 @bot.message_handler(commands=["stats"])
@@ -1913,10 +1923,10 @@ def cmd_stats(message):
         return
     uid = message.from_user.id
     u = stats["users"].get(str(uid), {"total": 0})
-    text = f"Сегодня: {used_today(uid)}/{DAILY_LIMIT}\nВсего запросов: {u['total']}"
+    text = f"Сьогодні: {used_today(uid)}/{DAILY_LIMIT}\nУсього запитів: {u['total']}"
     if uid == ADMIN_ID:
         rows = sorted(stats["users"].items(), key=lambda kv: kv[1]["total"], reverse=True)[:15]
-        text += "\n\nВсе пользователи:\n" + "\n".join(
+        text += "\n\nУсі користувачі:\n" + "\n".join(
             f"{v['name']} ({k}): {v['total']} всего, {v['days'].get(datetime.now(KYIV).date().isoformat(), 0)} сегодня"
             for k, v in rows
         )
@@ -1937,14 +1947,14 @@ def cmd_top(message):
         return
     rows = sorted(stats["users"].items(), key=lambda kv: kv[1]["total"], reverse=True)[:10]
     if not rows:
-        bot.reply_to(message, "Пока пусто — реши первое задание!")
+        bot.reply_to(message, "Поки порожньо — розв’яжи перше завдання!")
         return
     medals = ["🥇", "🥈", "🥉"]
     lines = [
         f"{medals[i] if i < 3 else str(i + 1) + '.'} {html.escape(str(v['name']))} — {v['total']} 🔥{streak_days(v)}"
         for i, (k, v) in enumerate(rows)
     ]
-    bot.reply_to(message, "🏆 <b>Топ класса</b>\n\n" + "\n".join(lines), parse_mode="HTML")
+    bot.reply_to(message, "🏆 <b>Топ класу</b>\n\n" + "\n".join(lines), parse_mode="HTML")
 # ===========================================================================
 # Карточки с интервальным повторением (/cards)
 # ===========================================================================
@@ -1988,8 +1998,8 @@ def cmd_cards(message):
         order = [i for i, c in enumerate(all_cards) if c.get("due", today) <= today]
         if not order:
             extra = f" Следующее повторение карточек: {min((c['due'] for c in all_cards), default='')}" if all_cards else ""
-            bot.reply_to(message, "Повторять пока нечего 🎉" + extra +
-                                  "\nСоздать карточки: /cards физика <тема>")
+            bot.reply_to(message, "Поки немає чого повторювати 🎉" + extra +
+                                  "\nСтворити картки: /cards фізика <тема>")
             return
         CARD_SESSION[uid] = {"cards": all_cards, "order": order, "pos": 0,
                              "chat": message.chat.id}
@@ -1998,34 +2008,34 @@ def cmd_cards(message):
 
     subject = resolve_subject(parts[1])
     if not subject:
-        bot.reply_to(message, "Не знаю такой предмет. Список: /subjects")
+        bot.reply_to(message, "Не знаю такого предмета. Список: /subjects")
         return
     topic = parts[2].strip() if len(parts) > 2 else ""
     if not topic:
-        bot.reply_to(message, "Укажи тему: /cards физика давление")
+        bot.reply_to(message, "Вкажи тему: /cards фізика тиск")
         return
     if limit_reached(uid):
-        bot.reply_to(message, f"Дневной лимит ({DAILY_LIMIT} запросов) исчерпан.")
+        bot.reply_to(message, f"Денний ліміт ({DAILY_LIMIT} запитів) вичерпано.")
         return
     path = book_path(subject)
     if not path:
-        bot.reply_to(message, f"Файл учебника «{SUBJECTS[subject]}» не найден.")
+        bot.reply_to(message, f"Файл підручника «{SUBJECTS[subject]}» не знайдено.")
         return
 
-    status = bot.reply_to(message, "Составляю карточки... ⏱️")
+    status = bot.reply_to(message, "Складаю картки… ⏱️")
     bot.send_chat_action(message.chat.id, "typing")
     try:
         context, _ = find_context(path, topic)
         prompt = (
-            "На основе фрагментов учебника составь 8 карточек для запоминания по теме "
-            f"«{topic}». Верни ТОЛЬКО JSON-массив вида "
-            '[{"q": "вопрос или термин", "a": "короткий ответ или определение"}]. '
-            "Вопросы короткие, ответы до 25 слов, на языке учебника, без HTML.\n\n"
-            f"Фрагменты:\n{context or '(нет)'}"
+            "На основі фрагментів підручника склади 8 карток для запам’ятовування за темою "
+            f"«{topic}». Поверни ЛИШЕ JSON-масив такого вигляду "
+            '[{"q": "запитання або термін", "a": "коротка відповідь або визначення"}]. '
+            "Запитання короткі, відповіді до 25 слів, українською, без HTML.\n\n"
+            f"Фрагменти:\n{context or '(немає)'}"
         )
         raw = call_gemini(prompt, json_mode=True, temperature=0.4)
         if not raw:
-            bot.edit_message_text("ИИ сейчас недоступен. Попробуй позже.",
+            bot.edit_message_text("ШІ зараз недоступний. Спробуй пізніше.",
                                   message.chat.id, status.message_id)
             return
         items = parse_json(raw)
@@ -2037,19 +2047,19 @@ def cmd_cards(message):
                                   "box": 0, "due": _today().isoformat()})
                 added += 1
         if not added:
-            bot.edit_message_text("Не получилось составить карточки, попробуй ещё раз.",
+            bot.edit_message_text("Не вдалося скласти картки, спробуй ще раз.",
                                   message.chat.id, status.message_id)
             return
         cards_save(uid, all_cards)
         register_use(uid, message.from_user.first_name)
         bot.edit_message_text(
             f"✅ Добавил {added} карточек по теме «{topic}».\n"
-            "Повторять: /cards — новые будут появляться по расписанию повторений.",
+            "Повторювати: /cards — нові картки з’являтимуться за графіком повторення.",
             message.chat.id, status.message_id)
     except Exception:
         log.exception("Ошибка карточек")
         try:
-            bot.edit_message_text("Произошла ошибка. Попробуй ещё раз.",
+            bot.edit_message_text("Сталася помилка. Спробуй ще раз.",
                                   message.chat.id, status.message_id)
         except Exception:
             pass
@@ -2063,7 +2073,7 @@ def show_card(uid):
     text = (f"🃏 Карточка {s['pos'] + 1}/{len(s['order'])}\n\n"
             f"<b>{html.escape(card['q'])}</b>")
     kb = InlineKeyboardMarkup()
-    kb.add(InlineKeyboardButton("Показать ответ", callback_data="card:show"))
+    kb.add(InlineKeyboardButton("Показати відповідь", callback_data="card:show"))
     try:
         bot.send_message(s["chat"], text, parse_mode="HTML", reply_markup=kb)
     except Exception:
@@ -2111,13 +2121,13 @@ def card_grade(call):
         bot.delete_message(call.message.chat.id, call.message.message_id)
     except Exception:
         pass
-    bot.answer_callback_query(call.id, "Молодец! 💪" if good else "Появится снова завтра.")
+    bot.answer_callback_query(call.id, "Молодець! 💪" if good else "З’явиться знову завтра.")
     if s["pos"] < len(s["order"]):
         show_card(uid)
     else:
         CARD_SESSION.pop(uid, None)
         bot.send_message(call.message.chat.id,
-                         "🎉 Сессия завершена! Нажми /cards завтра — покажу следующие.")
+                         "🎉 Сесію завершено! Нажми /cards завтра — покажу следующие.")
 
 
 # ===========================================================================
@@ -2135,24 +2145,24 @@ def cmd_proofread(message):
         task = parts[1].strip() if len(parts) > 1 else ""
     if not task:
         bot.reply_to(message, "Пиши так: /proofread <текст>\n"
-                              "Или ответь (reply) на сообщение командой /proofread")
+                              "Або відповідай на повідомлення командою /proofread")
         return
     if limit_reached(uid):
-        bot.reply_to(message, f"Дневной лимит ({DAILY_LIMIT} запросов) исчерпан.")
+        bot.reply_to(message, f"Денний ліміт ({DAILY_LIMIT} запитів) вичерпано.")
         return
-    status = bot.reply_to(message, "Проверяю... ⏱️")
+    status = bot.reply_to(message, "Перевіряю… ⏱️")
     bot.send_chat_action(message.chat.id, "typing")
     prompt = (
-        "Проверь текст на орфографические, пунктуационные и грамматические ошибки "
-        "(язык определяй сам: украинский или русский). Верни:\n"
-        "1) Список ошибок по пунктам в виде «неправильно → правильно (правило)».\n"
-        "2) Строку «ИСПРАВЛЕННЫЙ ТЕКСТ:» и текст без ошибок целиком.\n"
-        "Если ошибок нет — так и скажи. Не используй HTML.\n\n"
+        "Перевір текст на орфографічні, пунктуаційні та граматичні помилки. "
+        "Відповідай українською. Поверни:\n"
+        "1) Список помилок за пунктами у форматі «неправильно → правильно (правило)».\n"
+        "2) Рядок «ВИПРАВЛЕНИЙ ТЕКСТ:» і весь текст без помилок.\n"
+        "Якщо помилок немає — так і скажи. Не використовуй HTML.\n\n"
         f"Текст:\n{task[:3000]}"
     )
     answer = call_gemini([prompt], system_instruction=SYSTEM_BASE)
     if not answer:
-        bot.edit_message_text("ИИ сейчас недоступен, попробуй позже.",
+        bot.edit_message_text("ШІ зараз недоступний, спробуй пізніше.",
                               message.chat.id, status.message_id)
         return
     register_use(uid, message.from_user.first_name)
@@ -2183,22 +2193,22 @@ def cmd_remind(message):
     if text.lower() in ("список", "list"):
         mine = [r for r in reminds_load() if r["chat"] == message.chat.id]
         if not mine:
-            bot.reply_to(message, "Напоминаний нет. Добавить: /remind 20.05 контрольная по физике")
+            bot.reply_to(message, "Нагадувань немає. Додати: /remind 20.05 контрольна з фізики")
             return
         lines = [f"• {r['due']} — {r['text']}" for r in sorted(mine, key=lambda x: x["due"])]
-        bot.reply_to(message, "⏰ Напоминания:\n" + "\n".join(lines))
+        bot.reply_to(message, "⏰ Нагадування:\n" + "\n".join(lines))
         return
     m = re.search(r"(\d{1,2})[./](\d{1,2})(?:[./](\d{4}))?", text)
     if not m:
-        bot.reply_to(message, "Укажи дату и что напомнить:\n/remind 20.05 контрольная по физике\n"
-                              "Показать список: /remind список")
+        bot.reply_to(message, "Вкажи дату й що нагадати:\n/remind 20.05 контрольна з фізики\n"
+                              "Показати список: /remind список")
         return
     d_, mo_, y_ = m.groups()
     year = int(y_) if y_ else _today().year
     try:
         due = datetime(year, int(mo_), int(d_)).date()
     except ValueError:
-        bot.reply_to(message, "Такой даты не бывает. Пример: /remind 20.05 контрольная")
+        bot.reply_to(message, "Такої дати не буває. Приклад: /remind 20.05 контрольна")
         return
     if not y_ and due < _today():
         due = datetime(year + 1, int(mo_), int(d_)).date()
@@ -2207,7 +2217,7 @@ def cmd_remind(message):
     reminds.append({"chat": message.chat.id, "uid": message.from_user.id,
                     "text": what[:300], "due": due.isoformat(), "warned": False})
     reminds_save(reminds)
-    bot.reply_to(message, f"👌 Записал: {what}\nНапомню {due.strftime('%d.%m.%Y')} и за 2 дня до.")
+    bot.reply_to(message, f"👌 Записав: {what}\nНагадаю {due.strftime('%d.%m.%Y')} і за 2 дні до.")
 
 
 def _check_reminds():
@@ -2223,7 +2233,7 @@ def _check_reminds():
             continue
         if left == 2 and not r.get("warned"):
             try:
-                bot.send_message(r["chat"], f"⚠️ Через 2 дня: {r['text']}")
+                bot.send_message(r["chat"], f"⚠️ Через 2 дні: {r['text']}")
             except Exception:
                 pass
             r["warned"] = True
@@ -2231,7 +2241,7 @@ def _check_reminds():
             keep.append(r)
         elif left == 0:
             try:
-                bot.send_message(r["chat"], f"‼️ Сегодня: {r['text']}")
+                bot.send_message(r["chat"], f"‼️ Сьогодні: {r['text']}")
             except Exception:
                 pass
             changed = True
@@ -2258,16 +2268,16 @@ def cmd_pomodoro(message):
             s["t1"].cancel()
             if s.get("t2"):
                 s["t2"].cancel()
-            bot.reply_to(message, "🍅 Таймер остановлен.")
+            bot.reply_to(message, "🍅 Таймер зупинено.")
         else:
-            bot.reply_to(message, "Таймер и не был запущен.")
+            bot.reply_to(message, "Таймер не був запущений.")
         return
     try:
         mins = int(args[1]) if len(args) > 1 else 25
     except ValueError:
         mins = 25
     if not 5 <= mins <= 90:
-        bot.reply_to(message, "Ставь от 5 до 90 минут: /pomodoro 25")
+        bot.reply_to(message, "Встанови від 5 до 90 хвилин: /pomodoro 25")
         return
     old = POMODORO.pop(uid, None)
     if old:
@@ -2279,7 +2289,7 @@ def cmd_pomodoro(message):
 
     def on_break():
         try:
-            bot.send_message(chat, f"⏰ {mins} минут вышли! Перерыв {brk} мин ☕️")
+            bot.send_message(chat, f"⏰ {mins} хвилин минуло! Перерва {brk} мин ☕️")
         except Exception:
             pass
         t2 = threading.Timer(brk * 60, back_to_work)
@@ -2290,7 +2300,7 @@ def cmd_pomodoro(message):
     def back_to_work():
         POMODORO.pop(uid, None)
         try:
-            bot.send_message(chat, "🍅 Перерыв закончен — за учёбу!")
+            bot.send_message(chat, "🍅 Перерву завершено — до навчання!")
         except Exception:
             pass
 
@@ -2298,7 +2308,7 @@ def cmd_pomodoro(message):
     t1.daemon = True
     t1.start()
     POMODORO[uid] = {"t1": t1, "t2": None}
-    bot.reply_to(message, f"🍅 Погнали: {mins} мин учёбы → {brk} мин перерыва.\nОстановить: /pomodoro stop")
+    bot.reply_to(message, f"🍅 Починаємо: {mins} хв навчання → {brk} хв перерви.\nЗупинити: /pomodoro stop")
 
 
 # ===========================================================================
@@ -2319,7 +2329,7 @@ def _daily_admin_report():
     today = now.date().isoformat()
     reqs = sum(u["days"].get(today, 0) for u in stats["users"].values())
     active = sum(1 for u in stats["users"].values() if u["days"].get(today, 0))
-    redis_ok = "не подключён"
+    redis_ok = "не підключено"
     if kv_enabled():
         try:
             _kv(["PING"])
@@ -2328,11 +2338,11 @@ def _daily_admin_report():
             redis_ok = "НЕ ОТВЕЧАЕТ"
     try:
         bot.send_message(ADMIN_ID,
-                         f"📊 Отчёт за {today}\n"
-                         f"Запросов: {reqs} (активных учеников: {active})\n"
-                         f"👎 плохих ответов: {FB_LOG.count(today)}\n"
+                         f"📊 Звіт за {today}\n"
+                         f"Запитів: {reqs} (активних учнів: {active})\n"
+                         f"👎 поганих відповідей: {FB_LOG.count(today)}\n"
                          f"Redis: {redis_ok}\n"
-                         f"Бот живёт: {(time.time() - START_TIME) / 3600:.1f} ч")
+                         f"Бот працює: {(time.time() - START_TIME) / 3600:.1f} ч")
     except Exception:
         log.exception("Не удалось отправить отчёт админу")
 
@@ -2361,15 +2371,15 @@ def on_document(message):
     doc = message.document
     name = doc.file_name or "file.pdf"
     if not (name.lower().endswith(".pdf") or doc.mime_type == "application/pdf"):
-        bot.reply_to(message, "Пока умею только PDF. Пришли файл .pdf")
+        bot.reply_to(message, "Поки що вмію працювати лише з PDF. Надішли файл .pdf")
         return
     if (doc.file_size or 0) > 20 * 1024 * 1024:
-        bot.reply_to(message, "Файл больше 20 МБ — Telegram не даст его скачать.")
+        bot.reply_to(message, "Файл більший за 20 МБ — Telegram не дозволить його завантажити.")
         return
     if limit_reached(uid):
-        bot.reply_to(message, f"Дневной лимит ({DAILY_LIMIT} запросов) исчерпан.")
+        bot.reply_to(message, f"Денний ліміт ({DAILY_LIMIT} запитів) вичерпано.")
         return
-    status = bot.reply_to(message, "Читаю файл... ⏱️")
+    status = bot.reply_to(message, "Читаю файл… ⏱️")
     bot.send_chat_action(message.chat.id, "typing")
     try:
         info = bot.get_file(doc.file_id)
@@ -2378,40 +2388,40 @@ def on_document(message):
         text = "\n".join((p.extract_text() or "").strip() for p in reader.pages).strip()
     except Exception:
         log.exception("Не удалось прочитать PDF")
-        bot.edit_message_text("Не получилось прочитать PDF. Попробуй прислать фото страниц.",
+        bot.edit_message_text("Не вдалося прочитати PDF. Спробуй надіслати фото сторінок.",
                               message.chat.id, status.message_id)
         return
     if not text:
-        bot.edit_message_text("В PDF нет текста (похоже, это скан). Пришли фото страниц.",
+        bot.edit_message_text("У PDF немає тексту (схоже, це скан). Надішли фото сторінок.",
                               message.chat.id, status.message_id)
         return
     question = (message.caption or "").strip()
     if not question:
         head = html.escape(text[:600])
         bot.edit_message_text(
-            "📄 Файл прочитал. Теперь перешли этот же файл с подписью, что с ним делать, "
-            "например: «объясни тему», «реши задание 3», «составь тест по файлу».\n\n"
-            f"<b>Начало документа:</b>\n{head}",
+            "📄 Файл прочитано. Тепер перешли цей самий файл із підписом, що з ним зробити, "
+            "наприклад: «поясни тему», «розв’яжи завдання 3», «склади тест за файлом».\n\n"
+            f"<b>Початок документа:</b>\n{head}",
             message.chat.id, status.message_id, parse_mode="HTML")
         return
     try:
         answer = call_gemini(
-            [f"Документ от учителя (может быть обрезан):\n{text[:MAX_PDF_CHARS]}\n\n"
-             f"Вопрос или задание ученика по документу: {question}\n\n"
-             "Ответь по документу. Оформи структурированно, HTML-теги Telegram: <b>, <i>, <code>."],
+            [f"Документ від учителя (може бути обрізаний):\n{text[:MAX_PDF_CHARS]}\n\n"
+             f"Запитання або завдання учня за документом: {question}\n\n"
+             "Відповідай за документом. Оформи структуровано, HTML-теги Telegram: <b>, <i>, <code>."],
             system_instruction=SYSTEM_BASE)
     except Exception:
         log.exception("Ошибка запроса по PDF")
         answer = None
     if not answer:
-        bot.edit_message_text("ИИ сейчас недоступен, попробуй позже.",
+        bot.edit_message_text("ШІ зараз недоступний, спробуй пізніше.",
                               message.chat.id, status.message_id)
         return
     register_use(uid, message.from_user.first_name)
     send_answer(message.chat.id, status, answer, uid=uid, task=question[:500])
 
 # ===========================================================================
-# Вопрос дня (шлём в 18:00 всем подписчикам рассылки)
+# Запитання дня (шлём в 18:00 всем подписчикам рассылки)
 # ===========================================================================
 QDAY_HOUR = 18
 _qday_last = None
@@ -2426,7 +2436,7 @@ def on_qday_answer(call):
     if answer:
         bot.send_message(call.message.chat.id, f"💡 {html.escape(answer)}")
     else:
-        bot.send_message(call.message.chat.id, "Ответ устарел (бот перезапускался).")
+        bot.send_message(call.message.chat.id, "Відповідь застаріла (бот перезапускався).")
 
 
 def _question_of_the_day():
@@ -2444,13 +2454,13 @@ def _question_of_the_day():
         return
     page = random.choice(pages)
     raw = call_gemini(
-        "Придумай по фрагменту учебника ОДИН интересный вопрос для ученика 8 класса "
-        "и короткий ответ на него (до 40 слов). Верни ТОЛЬКО JSON вида "
-        '{"q": "вопрос", "a": "ответ"}.\n\n'
-        f"Фрагмент учебника ({subj}):\n{page[:3000]}",
+        "Придумай за фрагментом підручника ОДНЕ цікаве запитання для учня 8 класу "
+        "і коротку відповідь на нього (до 40 слів). Поверни ЛИШЕ JSON такого вигляду "
+        '{"q": "запитання", "a": "відповідь"}.\n\n'
+        f"Фрагмент підручника ({subj}):\n{page[:3000]}",
         json_mode=True, temperature=0.8)
     if not raw:
-        log.warning("Вопрос дня: ИИ не ответил")
+        log.warning("Запитання дня: ИИ не ответил")
         return
     try:
         it = parse_json(raw)
@@ -2463,15 +2473,15 @@ def _question_of_the_day():
     QDAY_CACHE[token] = a
     _trim(QDAY_CACHE, 50)
     kb = InlineKeyboardMarkup()
-    kb.add(InlineKeyboardButton("💡 Показать ответ", callback_data=f"qday:{token}"))
-    text = f"❓ <b>Вопрос дня</b> ({html.escape(subj)})\n\n{html.escape(q)}"
+    kb.add(InlineKeyboardButton("💡 Показати відповідь", callback_data=f"qday:{token}"))
+    text = f"❓ <b>Запитання дня</b> ({html.escape(subj)})\n\n{html.escape(q)}"
     for chat_id in broadcast_targets():
         try:
             bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=kb)
         except Exception:
-            log.exception("Вопрос дня: не отправилось в %s", chat_id)
+            log.exception("Запитання дня: не отправилось в %s", chat_id)
 # ===========================================================================
-# /exam - пробная контрольная
+# /exam - пробна контрольна
 # ===========================================================================
 EXAM_QCOUNT = 5
 EXAM = {}   # uid -> {"items", "answers", "pos", "chat", "subject"}
@@ -2485,29 +2495,29 @@ def cmd_exam(message):
     args = message.text.split(maxsplit=2)
     if len(args) > 1 and args[1].lower() in ("стоп", "stop"):
         if EXAM.pop(uid, None):
-            bot.reply_to(message, "Экзамен прерван. Начать заново: /exam физика")
+            bot.reply_to(message, "Контрольну перервано. Почати знову: /exam фізика")
         else:
-            bot.reply_to(message, "Экзамен и не шёл. Начать: /exam физика")
+            bot.reply_to(message, "Контрольна ще не розпочиналася. Почати: /exam фізика")
         return
     if uid in FORMULA:
-        bot.reply_to(message, "Сначала закончи тренажёр формул (/formulas стоп).")
+        bot.reply_to(message, "Спочатку заверши тренажер формул (/formulas стоп).")
         return
     if uid in EXAM:
-        bot.reply_to(message, "Экзамен уже идёт — отвечай на текущий вопрос или /exam стоп.")
+        bot.reply_to(message, "Контрольна вже триває — відповідай на поточне запитання або /exam стоп.")
         return
     subject = resolve_subject(args[1]) if len(args) > 1 else settings[uid].get("subject")
     if not subject:
-        bot.reply_to(message, "Укажи предмет: /exam физика [тема]")
+        bot.reply_to(message, "Вкажи предмет: /exam фізика [тема]")
         return
     topic = args[2].strip() if len(args) > 2 else ""
     if limit_reached(uid):
-        bot.reply_to(message, f"Дневной лимит ({DAILY_LIMIT} запросов) исчерпан.")
+        bot.reply_to(message, f"Денний ліміт ({DAILY_LIMIT} запитів) вичерпано.")
         return
     path = book_path(subject)
     if not path:
-        bot.reply_to(message, f"Файл учебника «{SUBJECTS[subject]}» не найден.")
+        bot.reply_to(message, f"Файл підручника «{SUBJECTS[subject]}» не знайдено.")
         return
-    status = bot.reply_to(message, "Составляю вариант контрольной... ⏱️")
+    status = bot.reply_to(message, "Складаю варіант контрольної… ⏱️")
     bot.send_chat_action(message.chat.id, "typing")
     try:
         if topic:
@@ -2516,20 +2526,20 @@ def cmd_exam(message):
             pages = [p for p in load_pages(path) if len(p) > 400]
             context = "\n\n".join(random.sample(pages, min(3, len(pages)))) if pages else ""
         prompt = (
-            f"На основе фрагментов учебника составь контрольную из {EXAM_QCOUNT} заданий "
-            "уровня 8 класса с КОРОТКИМИ ответами (число, слово, формула или 1 предложение). "
-            'Верни ТОЛЬКО JSON-массив вида [{"q": "текст задания", "a": "короткий эталонный ответ"}]. '
-            "Задания на языке учебника, разной сложности, без HTML.\n\n"
-            f"Фрагменты:\n{context or '(нет)'}"
+            f"На основі фрагментів підручника склади контрольну з {EXAM_QCOUNT} завдань "
+            "рівня 8 класу з КОРОТКИМИ відповідями (число, слово, формула або 1 речення). "
+            'Поверни ЛИШЕ JSON-масив такого вигляду [{"q": "текст завдання", "a": "коротка еталонна відповідь"}]. '
+            "Завдання українською, різної складності, без HTML.\n\n"
+            f"Фрагменти:\n{context or '(немає)'}"
         )
         raw = call_gemini(prompt, json_mode=True, temperature=0.5)
         if not raw:
-            bot.edit_message_text("ИИ сейчас недоступен, попробуй позже.",
+            bot.edit_message_text("ШІ зараз недоступний, спробуй пізніше.",
                                   message.chat.id, status.message_id)
             return
         items = [it for it in parse_json(raw) if it.get("q") and it.get("a")][:EXAM_QCOUNT]
         if len(items) < 3:
-            bot.edit_message_text("Не получилось составить вариант, попробуй ещё раз.",
+            bot.edit_message_text("Не вдалося скласти варіант, спробуй ще раз.",
                                   message.chat.id, status.message_id)
             return
         EXAM[uid] = {"items": items, "answers": [], "pos": 0,
@@ -2540,7 +2550,7 @@ def cmd_exam(message):
     except Exception:
         log.exception("Ошибка /exam")
         try:
-            bot.edit_message_text("Произошла ошибка. Попробуй ещё раз.",
+            bot.edit_message_text("Сталася помилка. Спробуй ще раз.",
                                   message.chat.id, status.message_id)
         except Exception:
             pass
@@ -2551,10 +2561,10 @@ def _exam_ask(uid):
     if not s:
         return
     q = s["items"][s["pos"]]["q"]
-    text = (f"📝 <b>Контрольная</b> ({html.escape(s['subject'])}) · "
-            f"задание {s['pos'] + 1} из {len(s['items'])}\n\n"
+    text = (f"📝 <b>Контрольна</b> ({html.escape(subject_label(s['subject']))}) · "
+            f"завдання {s['pos'] + 1} із {len(s['items'])}\n\n"
             f"{html.escape(str(q))}\n\n"
-            "<i>Ответ напиши следующим сообщением. Прервать: /exam стоп</i>")
+            "<i>Напиши відповідь наступним повідомленням. Перервати: /exam стоп</i>")
     bot.send_message(s["chat"], text, parse_mode="HTML")
 
 
@@ -2572,20 +2582,20 @@ def on_exam_answer(message):
         return
     # все ответы собраны - одна проверка на все задания
     bot.send_chat_action(s["chat"], "typing")
-    status = bot.send_message(s["chat"], "Проверяю работу... ⏱️")
+    status = bot.send_message(s["chat"], "Перевіряю роботу… ⏱️")
     qa = "\n\n".join(
-        f"{i + 1}. Задание: {it['q']}\nЭталон: {it['a']}\nОтвет ученика: {a or '(нет ответа)'}"
+        f"{i + 1}. Завдання: {it['q']}\nЕталон: {it['a']}\nВідповідь учня: {a or '(немає відповіді)'}"
         for i, (it, a) in enumerate(zip(s["items"], s["answers"])))
     prompt = (
-        "Проверь контрольную ученика. По каждому заданию поставь балл от 0 до 2 "
-        "(0 - неверно, 1 - частично верно, 2 - верно; засчитывай ответы, совпадающие "
-        "по смыслу, даже если формулировка другая). Верни ТОЛЬКО JSON: "
-        '[{"n": 1, "score": 2, "comment": "краткий комментарий до 100 символов"}].\n\n' + qa)
+        "Перевір контрольну учня. За кожне завдання постав бал від 0 до 2 "
+        "(0 — неправильно, 1 — частково правильно, 2 — правильно; зараховуй відповіді, що збігаються "
+        "за змістом, навіть якщо формулювання інше). Поверни ЛИШЕ JSON: "
+        '[{"n": 1, "score": 2, "comment": "короткий коментар до 100 символов"}].\n\n' + qa)
     raw = call_gemini(prompt, json_mode=True, temperature=0.1)
     EXAM.pop(uid, None)
     if not raw:
-        bot.edit_message_text("ИИ сейчас недоступен — работа не проверена. "
-                              "Попробуй позже ещё раз: /exam",
+        bot.edit_message_text("ШІ зараз недоступний — роботу не перевірено. "
+                              "Спробуй пізніше ще раз: /exam",
                               s["chat"], status.message_id)
         return
     try:
@@ -2600,18 +2610,18 @@ def on_exam_answer(message):
             sc = 0
         earned += sc
         lines.append(f"{'✅' if sc == 2 else '🟡' if sc == 1 else '❌'} "
-                     f"Задание {g.get('n', len(lines) + 1)}: {sc}/2 — "
+                     f"Завдання {g.get('n', len(lines) + 1)}: {sc}/2 — "
                      f"{html.escape(str(g.get('comment', '')))}")
     while len(lines) < len(s["items"]):
-        lines.append(f"❌ Задание {len(lines) + 1}: 0/2 — не проверено")
+        lines.append(f"❌ Завдання {len(lines) + 1}: 0/2 — не перевірено")
     mx = 2 * len(s["items"])
     grade = max(1, min(12, round((earned / mx if mx else 0) * 12)))
-    verdict = ("🎉 Отличная работа!" if grade >= 10
-               else "👍 Хорошо, но есть куда расти." if grade >= 7
-               else "📖 Материал надо повторить: /summary или /cards помогут.")
-    text = (f"📝 <b>Результат контрольной</b> ({html.escape(s['subject'])})\n\n"
+    verdict = ("🎉 Чудова робота!" if grade >= 10
+               else "👍 Добре, але є куди рости." if grade >= 7
+               else "📖 Матеріал треба повторити: /summary або /cards допоможуть.")
+    text = (f"📝 <b>Результат контрольної</b> ({html.escape(subject_label(s['subject']))})\n\n"
             + "\n".join(lines)
-            + f"\n\n<b>Баллы: {earned}/{mx} · Оценка: {grade}/12</b>\n{verdict}")
+            + f"\n\n<b>Бали: {earned}/{mx} · Оцінка: {grade}/12</b>\n{verdict}")
     try:
         bot.edit_message_text(text, s["chat"], status.message_id, parse_mode="HTML")
     except Exception:
@@ -2619,7 +2629,7 @@ def on_exam_answer(message):
 
 
 # ===========================================================================
-# /formulas - тренажёр формул
+# /formulas - тренажер формул
 # ===========================================================================
 FORMULA_ROUNDS = 5
 FORMULA = {}   # uid -> {"items", "pos", "right", "chat", "subject"}
@@ -2633,26 +2643,26 @@ def cmd_formulas(message):
     args = message.text.split(maxsplit=2)
     if len(args) > 1 and args[1].lower() in ("стоп", "stop"):
         if FORMULA.pop(uid, None):
-            bot.reply_to(message, "Тренажёр остановлен.")
+            bot.reply_to(message, "Тренажер зупинено.")
         else:
-            bot.reply_to(message, "Тренажёр и не шёл. Начать: /formulas физика")
+            bot.reply_to(message, "Тренажер ще не запускався. Почати: /formulas фізика")
         return
     if uid in EXAM:
-        bot.reply_to(message, "Сначала закончи контрольную (/exam стоп).")
+        bot.reply_to(message, "Спочатку заверши контрольну (/exam стоп).")
         return
     subject = resolve_subject(args[1]) if len(args) > 1 else settings[uid].get("subject")
     if not subject:
-        bot.reply_to(message, "Укажи предмет: /formulas физика [тема]")
+        bot.reply_to(message, "Вкажи предмет: /formulas фізика [тема]")
         return
     topic = args[2].strip() if len(args) > 2 else ""
     if limit_reached(uid):
-        bot.reply_to(message, f"Дневной лимит ({DAILY_LIMIT} запросов) исчерпан.")
+        bot.reply_to(message, f"Денний ліміт ({DAILY_LIMIT} запитів) вичерпано.")
         return
     path = book_path(subject)
     if not path:
-        bot.reply_to(message, f"Файл учебника «{SUBJECTS[subject]}» не найден.")
+        bot.reply_to(message, f"Файл підручника «{SUBJECTS[subject]}» не знайдено.")
         return
-    status = bot.reply_to(message, "Выбираю формулы... ⏱️")
+    status = bot.reply_to(message, "Обираю формули… ⏱️")
     bot.send_chat_action(message.chat.id, "typing")
     try:
         if topic:
@@ -2661,20 +2671,20 @@ def cmd_formulas(message):
             pages = [p for p in load_pages(path) if len(p) > 400]
             context = "\n\n".join(random.sample(pages, min(3, len(pages)))) if pages else ""
         prompt = (
-            f"На основе фрагментов учебника выбери {FORMULA_ROUNDS} формул или правил "
-            "уровня 8 класса. Верни ТОЛЬКО JSON-массив вида "
-            '[{"term": "название величины или правила", "formula": "сама формула текстом"}]. '
+            f"На основі фрагментів підручника вибери {FORMULA_ROUNDS} формул або правил "
+            "рівня 8 класу. Поверни ЛИШЕ JSON-масив такого вигляду "
+            '[{"term": "назва величини або правила", "formula": "сама формула текстом"}]. '
             "Без HTML.\n\n"
-            f"Фрагменты:\n{context or '(нет)'}"
+            f"Фрагменти:\n{context or '(немає)'}"
         )
         raw = call_gemini(prompt, json_mode=True, temperature=0.5)
         if not raw:
-            bot.edit_message_text("ИИ сейчас недоступен, попробуй позже.",
+            bot.edit_message_text("ШІ зараз недоступний, спробуй пізніше.",
                                   message.chat.id, status.message_id)
             return
         items = [it for it in parse_json(raw) if it.get("term") and it.get("formula")][:FORMULA_ROUNDS]
         if len(items) < 3:
-            bot.edit_message_text("Не получилось собрать формулы, попробуй ещё раз.",
+            bot.edit_message_text("Не вдалося зібрати формули, спробуй ще раз.",
                                   message.chat.id, status.message_id)
             return
         FORMULA[uid] = {"items": items, "pos": 0, "right": 0,
@@ -2685,7 +2695,7 @@ def cmd_formulas(message):
     except Exception:
         log.exception("Ошибка /formulas")
         try:
-            bot.edit_message_text("Произошла ошибка. Попробуй ещё раз.",
+            bot.edit_message_text("Сталася помилка. Спробуй ще раз.",
                                   message.chat.id, status.message_id)
         except Exception:
             pass
@@ -2696,10 +2706,10 @@ def _formula_ask(uid):
     if not f:
         return
     it = f["items"][f["pos"]]
-    text = (f"🧮 <b>Тренажёр формул</b> ({html.escape(f['subject'])}) · "
-            f"{f['pos'] + 1}/{len(f['items'])} · верно: {f['right']}\n\n"
+    text = (f"🧮 <b>Тренажер формул</b> ({html.escape(subject_label(f['subject']))}) · "
+            f"{f['pos'] + 1}/{len(f['items'])} · правильно: {f['right']}\n\n"
             f"Напиши формулу: <b>{html.escape(str(it['term']))}</b>\n\n"
-            "<i>Любой записью: E=mv²/2 или E = m*v^2/2. Выйти: /formulas стоп</i>")
+            "<i>У будь-якому записі: E=mv²/2 или E = m*v^2/2. Вийти: /formulas стоп</i>")
     bot.send_message(f["chat"], text, parse_mode="HTML")
 
 
@@ -2711,13 +2721,13 @@ def on_formula_answer(message):
     uid = message.from_user.id
     f = FORMULA[uid]
     it = f["items"][f["pos"]]
-    status = bot.reply_to(message, "Проверяю... ⏱️")
+    status = bot.reply_to(message, "Перевіряю… ⏱️")
     prompt = (
-        f"Величина: {it['term']}\nЭталонная формула: {it['formula']}\n"
-        f"Ответ ученика: {message.text[:200]}\n\n"
-        "Формулы считаются равными, если совпадает смысл (разные обозначения и форма "
-        'записи допустимы). Верни ТОЛЬКО JSON: '
-        '{"match": true/false, "correct": "правильная формула текстом"}')
+        f"Величина: {it['term']}\nЕталонна формула: {it['formula']}\n"
+        f"Відповідь учня: {message.text[:200]}\n\n"
+        "Формули вважаються однаковими, якщо збігається зміст (різні позначення та форма "
+        "запису допустимі). Поверни ЛИШЕ JSON: "
+        '{"match": true/false, "correct": "правильна формула текстом"}')
     raw = call_gemini(prompt, json_mode=True, temperature=0.0)
     ok, correct = False, str(it["formula"])
     if raw:
@@ -2734,7 +2744,7 @@ def on_formula_answer(message):
             f["right"] += 1
             mark = "✅ Верно!"
         else:
-            mark = f"❌ Не то. Правильно: <b>{html.escape(correct)}</b>"
+            mark = f"❌ Не те. Правильно: <b>{html.escape(correct)}</b>"
         try:
             bot.edit_message_text(mark, message.chat.id, status.message_id, parse_mode="HTML")
             bot.delete_message(message.chat.id, message.message_id)
@@ -2742,7 +2752,7 @@ def on_formula_answer(message):
             pass
     else:
         try:
-            bot.edit_message_text("ИИ недоступен, раунд пропущен.",
+            bot.edit_message_text("ШІ недоступний, раунд пропущено.",
                                   message.chat.id, status.message_id)
         except Exception:
             pass
@@ -2751,8 +2761,8 @@ def on_formula_answer(message):
     else:
         FORMULA.pop(uid, None)
         r, n = f["right"], len(f["items"])
-        bot.send_message(f["chat"], f"🏁 Итог: {r} из {n}. "
-                         + ("💪 Отлично!" if r == n else "Ещё заход: /formulas"))
+        bot.send_message(f["chat"], f"🏁 Підсумок: {r} із {n}. "
+                         + ("💪 Чудово!" if r == n else "Ще одна спроба: /formulas"))
 
 def _mode_command(mode, usage):
     def handler(message):
@@ -2768,10 +2778,10 @@ def _mode_command(mode, usage):
     return handler
 
 
-bot.message_handler(commands=["explain"])(_mode_command("explain", "Пример: /explain физика задача 3.5"))
-bot.message_handler(commands=["check"])(_mode_command("check", "Пример: /check алгебра моё решение: x = 5... (или отправь фото с подписью /check)"))
-bot.message_handler(commands=["summary"])(_mode_command("summary", "Пример: /summary история Первая мировая война"))
-bot.message_handler(commands=["essay"])(_mode_command("essay", "Пример: /essay укрлит образ Тараса Бульбы, 250 слов"))
+bot.message_handler(commands=["explain"])(_mode_command("explain", "Приклад: /explain фізика задача 3.5"))
+bot.message_handler(commands=["check"])(_mode_command("check", "Приклад: /check алгебра мій розв’язок: x = 5... (або надішли фото з підписом /check)"))
+bot.message_handler(commands=["summary"])(_mode_command("summary", "Приклад: /summary история Первая мировая война"))
+bot.message_handler(commands=["essay"])(_mode_command("essay", "Приклад: /essay укрлит образ Тараса Бульби, 250 слів"))
 
 
 @bot.message_handler(commands=["quiz"])
@@ -2782,7 +2792,7 @@ def cmd_quiz(message):
     subject, topic = split_subject(args[1] if len(args) > 1 else "")
     subject = subject or settings[message.from_user.id]["subject"]
     if not subject:
-        bot.reply_to(message, "Укажи предмет: /quiz физика или /quiz физика законы Ньютона")
+        bot.reply_to(message, "Вкажи предмет: /quiz фізика або /quiz фізика закони Ньютона")
         return
     run_quiz(message, subject, topic)
 
@@ -2805,7 +2815,7 @@ def on_photo(message):
         data = bot.download_file(bot.get_file(message.photo[-1].file_id).file_path)
     except Exception:
         log.exception("Не удалось скачать фото")
-        bot.reply_to(message, "Не удалось скачать фото, попробуй ещё раз.")
+        bot.reply_to(message, "Не вдалося завантажити фото, спробуй ще раз.")
         return
     dispatch(message, mode, subject, task, [gt.Part.from_bytes(data=data, mime_type="image/jpeg")])
 
@@ -2816,14 +2826,14 @@ def on_voice(message):
         return
     obj = message.voice or message.audio
     if obj.duration and obj.duration > MAX_VOICE_SECONDS:
-        bot.reply_to(message, f"Голосовое слишком длинное (максимум {MAX_VOICE_SECONDS} сек).")
+        bot.reply_to(message, f"Голосове повідомлення надто довге (максимум {MAX_VOICE_SECONDS} с).")
         return
     mime = "audio/ogg" if message.voice else (obj.mime_type or "audio/mpeg")
     try:
         data = bot.download_file(bot.get_file(obj.file_id).file_path)
     except Exception:
         log.exception("Не удалось скачать аудио")
-        bot.reply_to(message, "Не удалось скачать аудио, попробуй ещё раз.")
+        bot.reply_to(message, "Не вдалося завантажити аудіо, спробуй ще раз.")
         return
     subject = settings[message.from_user.id]["subject"]
     dispatch(message, "answer", subject, "", [gt.Part.from_bytes(data=data, mime_type=mime)])
@@ -2839,8 +2849,8 @@ def on_text(message):
                                         "subscribe", "unsubscribe", "help", "class", "cards",
                                         "proofread", "remind", "pomodoro", "exam", "formulas",
                                         "id"], n=1, cutoff=0.6)
-        hint = f" Может, ты имел в виду /{close[0]}?" if close else ""
-        bot.reply_to(message, f"Не знаю такую команду.{hint}\nСписок: /help")
+        hint = f" Можливо, ти мав на увазі /{close[0]}?" if close else ""
+        bot.reply_to(message, f"Не знаю такої команди.{hint}\nСписок: /help")
         return
     if not gate(message):
         return
@@ -2848,10 +2858,10 @@ def on_text(message):
     subject, task = split_subject(message.text)
     if subject and not task:
         settings[uid]["subject"] = subject
-        bot.reply_to(message, f"Предмет выбран: {subject}. Теперь пиши задание.")
+        bot.reply_to(message, f"Предмет обрано: {subject_label(subject)}. Тепер пиши завдання.")
         return
     subject = subject or settings[uid]["subject"]
-    dispatch(message, "answer", subject, task, [])# Словарь с твоим расписанием 8-Б
+    dispatch(message, "answer", subject, task, [])# Словник із твоїм розкладом 8-Б
 
 # ===========================================================================
 # Мини-веб-сервер (нужен Render, чтобы считать сервис живым; на него же
@@ -2888,7 +2898,7 @@ if __name__ == "__main__":
     threading.Thread(target=preload_books, daemon=True).start()
     threading.Thread(target=broadcast_loop, daemon=True).start()
     threading.Thread(target=daily_loop, daemon=True).start()
-    log.info("Бот запущен. Модели: %s | ключей Gemini: %d", ", ".join(MODELS), len(API_KEYS))
+    log.info("Бот запущено. Модели: %s | ключей Gemini: %d", ", ".join(MODELS), len(API_KEYS))
     # ===========================================================================
     # Инлайн-режим: @имя_бота вопрос - в любом чате
     # ===========================================================================
@@ -2915,7 +2925,7 @@ if __name__ == "__main__":
             if limit_reached(uid):
                 bot.answer_inline_query(query.id, [], cache_time=1)
                 return
-            answer = call_gemini([f"Ответь кратко (до 100 слов) на вопрос ученика:\n{q[:500]}"],
+            answer = call_gemini([f"Відповідай коротко (до 100 слів) на запитання учня:\n{q[:500]}"],
                                  system_instruction=SYSTEM_BASE, temperature=0.2)
             if not answer:
                 bot.answer_inline_query(query.id, [], cache_time=1)
@@ -2929,7 +2939,7 @@ if __name__ == "__main__":
             art = tg.InlineQueryResultArticle(
                 query.id, title,
                 tg.InputTextMessageContent(text, parse_mode="HTML"),
-                description="Ответ ИИ · нажми, чтобы отправить в чат")
+                description="Відповідь ШІ · натисни, щоб надіслати в чат")
             bot.answer_inline_query(query.id, [art], cache_time=10)
         except Exception:
             log.exception("Ошибка inline")
