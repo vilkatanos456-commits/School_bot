@@ -1949,6 +1949,7 @@ def cmd_support_terms(message):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("support:"))
 def on_support_callback(call):
+    log.info("Stars callback received: action=%s", call.data.split(":", 2)[1] if call.data and ":" in call.data else "unknown")
     if call.message.chat.type != "private":
         bot.answer_callback_query(call.id, "Оплата доступна лише в особистому чаті.", show_alert=True)
         return
@@ -2002,6 +2003,7 @@ def on_support_callback(call):
         if sku == "extra"
         else "Добровільна підтримка проєкту. Без підписки та без зміни безкоштовного ліміту."
     )
+    log.info("Creating Stars invoice: sku=%s amount=%s", sku, product["stars"])
     try:
         bot.send_invoice(
             chat_id=call.message.chat.id,
@@ -2012,6 +2014,7 @@ def on_support_callback(call):
             currency="XTR",
             prices=[tg.LabeledPrice(product["label"], product["stars"])],
         )
+        log.info("Stars invoice sent: sku=%s", sku)
     except Exception:
         log.exception("Не вдалося створити рахунок Telegram Stars")
         bot.send_message(call.message.chat.id, "Не вдалося відкрити оплату. Спробуй пізніше.")
@@ -3265,6 +3268,16 @@ if __name__ == "__main__":
             bot.answer_inline_query(query.id, [art], cache_time=10)
         except Exception:
             log.exception("Ошибка inline")
+    @bot.callback_query_handler(func=lambda call: bool(call.data))
+    def on_unhandled_callback(call):
+        prefix = call.data.split(":", 1)[0] if call.data else "empty"
+        log.warning("Unhandled callback query: prefix=%s", prefix)
+        bot.answer_callback_query(
+            call.id,
+            "\u041a\u043d\u043e\u043f\u043a\u0430 \u0437\u0430\u0441\u0442\u0430\u0440\u0456\u043b\u0430. \u0412\u0456\u0434\u043a\u0440\u0438\u0439 /support \u0456 \u0441\u043f\u0440\u043e\u0431\u0443\u0439 \u0449\u0435 \u0440\u0430\u0437.",
+            show_alert=True,
+        )
+
     while True:
         try:
             bot.infinity_polling(skip_pending=not payments_enabled())
