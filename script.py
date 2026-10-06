@@ -38,8 +38,6 @@ from pypdf import PdfReader
 #   ADMIN_ID         - твій Telegram ID (без лимитов, видит статистику)
 #   ALLOWED_IDS      - ID через запятую; пусто = доступ у всех
 #   DAILY_LIMIT      - запросов в сутки на пользователя (по умолч. 40)
-#   EXTRA_REQUESTS_PACK / EXTRA_REQUESTS_PRICE_STARS - объём и цена доп. пакета
-#   BOT_PAYMENTS_ENABLED - включить после настройки Stars, ADMIN_ID и Upstash Redis
 #   TOP_PAGES        - сколько страниц учебника отдавать модели (по умолч. 2)
 def _split_env(name):
     raw = os.environ.get(name, "")
@@ -52,9 +50,6 @@ MODELS = _split_env("GEMINI_MODELS") or ["gemini-3.5-flash-lite"]
 ALLOWED_IDS = {int(x) for x in _split_env("ALLOWED_IDS")}
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "0") or 0)
 DAILY_LIMIT = int(os.environ.get("DAILY_LIMIT", "40"))
-EXTRA_REQUESTS_PACK = max(1, int(os.environ.get("EXTRA_REQUESTS_PACK", "20")))
-EXTRA_REQUESTS_PRICE_STARS = max(1, int(os.environ.get("EXTRA_REQUESTS_PRICE_STARS", "15")))
-BOT_PAYMENTS_ENABLED = os.environ.get("BOT_PAYMENTS_ENABLED", "0").lower() in ("1", "true", "yes")
 TOP_PAGES = int(os.environ.get("TOP_PAGES", "2"))
 
 if ":" not in TELEGRAM_TOKEN:
@@ -236,7 +231,7 @@ def on_similar(call):
         bot.answer_callback_query(call.id, "Немає доступу.", show_alert=True)
         return
     if limit_reached(uid):
-        bot.answer_callback_query(call.id, "Денний ліміт вичерпано. Додаткові запити: /support", show_alert=True)
+        bot.answer_callback_query(call.id, "Денний ліміт вичерпано. Спробуй завтра.", show_alert=True)
         return
     data = SIM_CACHE.get(call.data.split(":", 1)[1])
     if not data:
@@ -278,7 +273,7 @@ def on_rewrite(call):
         bot.answer_callback_query(call.id, "Немає доступу.", show_alert=True)
         return
     if limit_reached(uid):
-        bot.answer_callback_query(call.id, "Денний ліміт вичерпано. Додаткові запити: /support", show_alert=True)
+        bot.answer_callback_query(call.id, "Денний ліміт вичерпано. Спробуй завтра.", show_alert=True)
         return
     data = REWRITE_CACHE.get(call.data.split(":", 1)[1])
     if not data:
@@ -358,10 +353,6 @@ _kv_skip_save = set()  # ключи, которые не удалось проч
 def kv_enabled():
     return bool(KV_URL and KV_TOKEN)
 
-
-def payments_enabled():
-    # Paid credits and payment support must survive restarts/deploys.
-    return BOT_PAYMENTS_ENABLED and ADMIN_ID > 0 and kv_enabled() and "hwbot:stats" not in _kv_skip_save
 
 
 def _kv(cmd):
@@ -460,8 +451,6 @@ def register_use(uid, name):
         u["name"] = name
         u["total"] += 1
         used = u["days"].get(today, 0)
-        if uid != ADMIN_ID and used >= DAILY_LIMIT and u.get("extra_requests", 0) > 0:
-            u["extra_requests"] -= 1
         u["days"][today] = used + 1
         _stats_dirty = True
     # Запись в Redis/диск никогда не тормозит ответ ученику.
@@ -475,11 +464,7 @@ def used_today(uid):
 
 
 def limit_reached(uid):
-    if uid == ADMIN_ID or used_today(uid) < DAILY_LIMIT:
-        return False
-    u = stats["users"].get(str(uid), {})
-    return u.get("extra_requests", 0) <= 0
-
+    return uid != ADMIN_ID and used_today(uid) >= DAILY_LIMIT
 
 # ===========================================================================
 # Безопасная отправка ответов (HTML Telegram)
@@ -1520,7 +1505,7 @@ def dispatch(message, mode, subject, task, media):
 
 def process(chat_id, reply_to, uid, name, mode, subject, task, media):
     if limit_reached(uid):
-        bot.send_message(chat_id, f"Безкоштовний денний ліміт ({DAILY_LIMIT}) вичерпано. Додаткові запити: /support",
+        bot.send_message(chat_id, f"Безкоштовний денний ліміт ({DAILY_LIMIT}) вичерпано. Спробуй завтра.",
                          reply_to_message_id=reply_to)
         return
 
@@ -1761,7 +1746,7 @@ def run_quiz(message, subject, topic):
     uid = message.from_user.id
     chat_id = message.chat.id
     if limit_reached(uid):
-        bot.reply_to(message, f"Безкоштовний денний ліміт ({DAILY_LIMIT}) вичерпано. Додаткові запити: /support")
+        bot.reply_to(message, f"Безкоштовний денний ліміт ({DAILY_LIMIT}) вичерпано. Спробуй завтра.")
         return
     path = book_path(subject)
     if not path:
@@ -1849,8 +1834,6 @@ HELP_TEXT = (
     "/remind 20.05 контрольна — нагадування ⏰\n"
     "/pomodoro 25 — таймер навчання/перерви 🍅\n"
     "/menu — показати кнопки основних команд\n"
-    "/support — добровільно підтримати бота або придбати додаткові запити ⭐\n"
-    "/terms — умови донату й додаткових запитів\n"
     "/short, /detail, /normal — довжина відповідей\n"
     "/essay [предмет] тема — написати твір\n"
     "/quick — режим лише коротких відповідей (вийти: /normal)\n"
@@ -1867,7 +1850,7 @@ def main_menu_keyboard():
         tg.KeyboardButton("/quiz"), tg.KeyboardButton("/cards"),
         tg.KeyboardButton("/exam"), tg.KeyboardButton("/formulas"),
         tg.KeyboardButton("/remind"), tg.KeyboardButton("/pomodoro"),
-        tg.KeyboardButton("/subjects"), tg.KeyboardButton("/support"),
+        tg.KeyboardButton("/subjects"),
         tg.KeyboardButton("/help"),
     )
     return markup
@@ -1881,264 +1864,6 @@ def cmd_menu(message):
             "Обери команду або просто надішли завдання текстом чи фото:",
             reply_markup=main_menu_keyboard(),
         )
-
-
-SUPPORT_PRODUCTS = {
-    "tip_5": {"title": "Підтримка шкільного бота", "label": "Добровільна підтримка", "stars": 5},
-    "tip_15": {"title": "Підтримка шкільного бота", "label": "Добровільна підтримка", "stars": 15},
-    "tip_30": {"title": "Підтримка шкільного бота", "label": "Добровільна підтримка", "stars": 30},
-    "extra": {
-        "title": f"{EXTRA_REQUESTS_PACK} додаткових запитів",
-        "label": f"Пакет: {EXTRA_REQUESTS_PACK} запитів",
-        "stars": EXTRA_REQUESTS_PRICE_STARS,
-        "extra_requests": EXTRA_REQUESTS_PACK,
-    },
-}
-
-SUPPORT_TERMS_TEXT = (
-    "Умови підтримки та додаткових запитів\n"
-    "• Базові функції та денний ліміт залишаються безкоштовними.\n"
-    "• Підтримка за 5, 15 або 30 зірок добровільна; вона не підвищує ліміт.\n"
-    f"• Пакет додає {EXTRA_REQUESTS_PACK} запитів. Вони витрачаються після безкоштовного денного ліміту й не згорають.\n"
-    "• Оплата разова, автоматичної підписки немає.\n"
-    "• Для питань щодо платежу скористайся /paysupport — їх вирішує адміністратор бота, не підтримка Telegram."
-)
-
-PAY_SUPPORT_PENDING = set()
-
-
-@bot.message_handler(commands=["support", "donate"])
-def cmd_support(message):
-    if not gate(message, cooldown=False):
-        return
-    if message.chat.type != "private":
-        bot.reply_to(message, "Платежі доступні лише в особистому чаті з ботом.")
-        return
-    if not payments_enabled():
-        bot.reply_to(
-            message,
-            f"Оплату ще не підключено. Усі функції та {DAILY_LIMIT} безкоштовних запитів на день працюють як раніше.",
-        )
-        return
-    markup = tg.InlineKeyboardMarkup(row_width=2)
-    markup.add(
-        tg.InlineKeyboardButton("☕ Підтримати · 5⭐", callback_data="support:choose:tip_5"),
-        tg.InlineKeyboardButton("☕ Підтримати · 15⭐", callback_data="support:choose:tip_15"),
-        tg.InlineKeyboardButton("💛 Підтримати · 30⭐", callback_data="support:choose:tip_30"),
-        tg.InlineKeyboardButton(
-            f"➕ +{EXTRA_REQUESTS_PACK} запитів · {EXTRA_REQUESTS_PRICE_STARS}⭐",
-            callback_data="support:choose:extra",
-        ),
-    )
-    bot.send_message(
-        message.chat.id,
-        f"Усі функції та {DAILY_LIMIT} запитів щодня залишаються безкоштовними. "
-        "Підтримка добровільна й не змінює ліміт. Додаткові запити — окремий пакет: "
-        "вони використовуються після безкоштовних і не згорають.\n\n"
-        "Оплата в Telegram — зірками ⭐. Перед рахунком бот покаже умови й попросить підтвердження. "
-        "Повні умови: /terms. Проблема з оплатою: /paysupport",
-        reply_markup=markup,
-    )
-
-
-@bot.message_handler(commands=["terms"])
-def cmd_support_terms(message):
-    if gate(message, cooldown=False):
-        bot.send_message(message.chat.id, SUPPORT_TERMS_TEXT)
-
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("support:"))
-def on_support_callback(call):
-    log.info("Stars callback received: action=%s", call.data.split(":", 2)[1] if call.data and ":" in call.data else "unknown")
-    if call.message.chat.type != "private":
-        bot.answer_callback_query(call.id, "Оплата доступна лише в особистому чаті.", show_alert=True)
-        return
-    if not payments_enabled():
-        bot.answer_callback_query(call.id, "Оплата ще не підключена автором бота.", show_alert=True)
-        return
-    parts = call.data.split(":")
-    if len(parts) == 3 and parts[1] == "choose":
-        sku = parts[2]
-        product = SUPPORT_PRODUCTS.get(sku)
-        if not product:
-            bot.answer_callback_query(call.id, "Цей варіант оплати недоступний.", show_alert=True)
-            return
-        bot.answer_callback_query(call.id)
-        markup = tg.InlineKeyboardMarkup()
-        markup.add(tg.InlineKeyboardButton(
-            "✅ Погоджуюсь з умовами й продовжити",
-            callback_data=f"support:confirm:{sku}:{call.from_user.id}",
-        ))
-        item_text = (
-            f"Обрано пакет: +{EXTRA_REQUESTS_PACK} запитів за {product['stars']}⭐."
-            if sku == "extra"
-            else f"Обрана добровільна підтримка: {product['stars']}⭐ без зміни ліміту."
-        )
-        bot.send_message(
-            call.message.chat.id,
-            f"{SUPPORT_TERMS_TEXT}\n\n{item_text}\n\nНатисни підтвердження, лише якщо погоджуєшся з умовами.",
-            reply_markup=markup,
-        )
-        return
-    if len(parts) != 4 or parts[1] != "confirm":
-        bot.answer_callback_query(call.id, "Цей варіант оплати недоступний.", show_alert=True)
-        return
-    sku = parts[2]
-    try:
-        confirmed_uid = int(parts[3])
-    except ValueError:
-        confirmed_uid = None
-    if confirmed_uid != call.from_user.id:
-        bot.answer_callback_query(call.id, "Підтвердження належить іншому користувачу.", show_alert=True)
-        return
-    product = SUPPORT_PRODUCTS.get(sku)
-    if not product:
-        bot.answer_callback_query(call.id, "Цей варіант оплати недоступний.", show_alert=True)
-        return
-    bot.answer_callback_query(call.id)
-    payload = f"v1:{sku}:{call.from_user.id}:{uuid.uuid4().hex[:12]}"
-    description = (
-        f"Пакет із {EXTRA_REQUESTS_PACK} додаткових запитів. "
-        "Безкоштовний денний ліміт не змінюється."
-        if sku == "extra"
-        else "Добровільна підтримка проєкту. Без підписки та без зміни безкоштовного ліміту."
-    )
-    log.info("Creating Stars invoice: sku=%s amount=%s", sku, product["stars"])
-    try:
-        bot.send_invoice(
-            chat_id=call.message.chat.id,
-            title=product["title"],
-            description=description,
-            invoice_payload=payload,
-            provider_token="",
-            currency="XTR",
-            prices=[tg.LabeledPrice(product["label"], product["stars"])],
-        )
-        log.info("Stars invoice sent: sku=%s", sku)
-    except Exception:
-        log.exception("Не вдалося створити рахунок Telegram Stars")
-        bot.send_message(call.message.chat.id, "Не вдалося відкрити оплату. Спробуй пізніше.")
-
-
-def parse_support_payload(payload):
-    parts = (payload or "").split(":")
-    if len(parts) != 4 or parts[0] != "v1":
-        return None, None
-    try:
-        return parts[1], int(parts[2])
-    except ValueError:
-        return None, None
-
-
-@bot.pre_checkout_query_handler(func=lambda query: True)
-def on_support_pre_checkout(query):
-    sku, expected_uid = parse_support_payload(query.invoice_payload)
-    product = SUPPORT_PRODUCTS.get(sku)
-    valid = (
-        payments_enabled()
-        and product is not None
-        and expected_uid == query.from_user.id
-        and query.currency == "XTR"
-        and query.total_amount == product["stars"]
-        and (not ALLOWED_IDS or query.from_user.id in ALLOWED_IDS or query.from_user.id == ADMIN_ID)
-    )
-    if valid:
-        bot.answer_pre_checkout_query(query.id, ok=True)
-    else:
-        bot.answer_pre_checkout_query(
-            query.id,
-            ok=False,
-            error_message="Не вдалося перевірити рахунок. Повернися в меню /support і спробуй ще раз.",
-        )
-
-
-@bot.message_handler(content_types=["successful_payment"])
-def on_support_payment(message):
-    global _stats_dirty
-    payment = message.successful_payment
-    sku, expected_uid = parse_support_payload(payment.invoice_payload)
-    product = SUPPORT_PRODUCTS.get(sku)
-    if (product is None or expected_uid != message.from_user.id
-            or payment.currency != "XTR" or payment.total_amount != product["stars"]):
-        log.error("Получен платеж с неподходящими параметрами от user_id=%s", message.from_user.id)
-        bot.reply_to(message, "Платіж отримано, але не вдалося перевірити замовлення. Напиши /paysupport.")
-        if ADMIN_ID:
-            bot.send_message(ADMIN_ID, f"Перевір платіж вручну: user_id={message.from_user.id}, /paysupport")
-        return
-
-    uid = message.from_user.id
-    charge_id = payment.telegram_payment_charge_id
-    today_user = {
-        "name": message.from_user.first_name or "Учень",
-        "total": 0,
-        "days": {},
-    }
-    duplicate = False
-    with _stats_lock:
-        user = stats["users"].setdefault(str(uid), today_user)
-        charge_ids = user.setdefault("star_charge_ids", [])
-        if charge_id in charge_ids:
-            duplicate = True
-        else:
-            charge_ids.append(charge_id)
-            user["star_charge_ids"] = charge_ids[-200:]
-            if sku == "extra":
-                user["extra_requests"] = user.get("extra_requests", 0) + EXTRA_REQUESTS_PACK
-            else:
-                user["supporter"] = True
-            _stats_dirty = True
-    if not duplicate:
-        _flush_stats(force=True)
-    if _stats_dirty:
-        log.error("Платіж оброблено, але статистику не вдалося зберегти для user_id=%s", uid)
-        bot.reply_to(
-            message,
-            "Платіж отримано, але збереження тимчасово недоступне. Напиши /paysupport, щоб адміністратор перевірив запит.",
-        )
-        if ADMIN_ID:
-            bot.send_message(ADMIN_ID, f"Перевір збереження платежу: user_id={uid}, товар={sku}, charge_id={charge_id}")
-        return
-    if sku == "extra":
-        bot.reply_to(
-            message,
-            f"Готово! Додав {EXTRA_REQUESTS_PACK} запитів. Безкоштовний ліміт {DAILY_LIMIT} на день не змінено.",
-        )
-    else:
-        bot.reply_to(message, "Дякую за підтримку шкільного бота! У /stats з’явиться відзнака підтримки. Безкоштовні можливості й ліміт не змінюються 💛")
-
-
-@bot.message_handler(commands=["paysupport"])
-def cmd_payment_support(message):
-    if message.chat.type != "private":
-        bot.reply_to(message, "Платіжна підтримка доступна лише в особистому чаті з ботом.")
-        return
-    if not ADMIN_ID:
-        bot.reply_to(message, "Платіжна підтримка ще не налаштована. Напиши автору бота напряму.")
-        return
-    PAY_SUPPORT_PENDING.add(message.from_user.id)
-    bot.reply_to(message, "Опиши проблему або надішли скриншот чека наступним повідомленням — я перешлю його адміністратору.")
-
-
-@bot.message_handler(
-    func=lambda message: bool(
-        message.from_user
-        and message.chat.type == "private"
-        and message.from_user.id in PAY_SUPPORT_PENDING
-        and message.content_type in ("text", "photo", "document")
-        and not ((message.text or "").startswith("/"))
-    ),
-    content_types=["text", "photo", "document"],
-)
-def forward_payment_support(message):
-    PAY_SUPPORT_PENDING.discard(message.from_user.id)
-    try:
-        username = f"@{message.from_user.username}" if message.from_user.username else "(no username)"
-        bot.send_message(ADMIN_ID, f"Звернення щодо платежу від {username}, user_id={message.from_user.id}:")
-        bot.forward_message(ADMIN_ID, message.chat.id, message.message_id)
-        bot.reply_to(message, "Передав адміністратору. Збережи чек до відповіді.")
-    except Exception:
-        log.exception("Не вдалося передати звернення щодо платежу адміністратору")
-        bot.reply_to(message, "Не вдалося передати звернення. Спробуй пізніше.")
 
 
 @bot.message_handler(commands=["start", "help"])
@@ -2244,11 +1969,8 @@ def cmd_stats(message):
     u = stats["users"].get(str(uid), {"total": 0})
     text = (
         f"Безкоштовно сьогодні: {min(used_today(uid), DAILY_LIMIT)}/{DAILY_LIMIT}\n"
-        f"Додаткових запитів: {u.get('extra_requests', 0)}\n"
         f"Усього запитів: {u['total']}"
     )
-    if u.get("supporter"):
-        text += "\nСтатус: підтримує бота 💛"
     if uid == ADMIN_ID:
         rows = sorted(stats["users"].items(), key=lambda kv: kv[1]["total"], reverse=True)[:15]
         text += "\n\nУсі користувачі:\n" + "\n".join(
@@ -2340,7 +2062,7 @@ def cmd_cards(message):
         bot.reply_to(message, "Вкажи тему: /cards фізика тиск")
         return
     if limit_reached(uid):
-        bot.reply_to(message, f"Безкоштовний денний ліміт ({DAILY_LIMIT}) вичерпано. Додаткові запити: /support")
+        bot.reply_to(message, f"Безкоштовний денний ліміт ({DAILY_LIMIT}) вичерпано. Спробуй завтра.")
         return
     path = book_path(subject)
     if not path:
@@ -2473,7 +2195,7 @@ def cmd_proofread(message):
                               "Або відповідай на повідомлення командою /proofread")
         return
     if limit_reached(uid):
-        bot.reply_to(message, f"Безкоштовний денний ліміт ({DAILY_LIMIT}) вичерпано. Додаткові запити: /support")
+        bot.reply_to(message, f"Безкоштовний денний ліміт ({DAILY_LIMIT}) вичерпано. Спробуй завтра.")
         return
     status = bot.reply_to(message, "Перевіряю… ⏱️")
     bot.send_chat_action(message.chat.id, "typing")
@@ -2702,7 +2424,7 @@ def on_document(message):
         bot.reply_to(message, "Файл більший за 20 МБ — Telegram не дозволить його завантажити.")
         return
     if limit_reached(uid):
-        bot.reply_to(message, f"Безкоштовний денний ліміт ({DAILY_LIMIT}) вичерпано. Додаткові запити: /support")
+        bot.reply_to(message, f"Безкоштовний денний ліміт ({DAILY_LIMIT}) вичерпано. Спробуй завтра.")
         return
     status = bot.reply_to(message, "Читаю файл… ⏱️")
     bot.send_chat_action(message.chat.id, "typing")
@@ -2836,7 +2558,7 @@ def cmd_exam(message):
         return
     topic = args[2].strip() if len(args) > 2 else ""
     if limit_reached(uid):
-        bot.reply_to(message, f"Безкоштовний денний ліміт ({DAILY_LIMIT}) вичерпано. Додаткові запити: /support")
+        bot.reply_to(message, f"Безкоштовний денний ліміт ({DAILY_LIMIT}) вичерпано. Спробуй завтра.")
         return
     path = book_path(subject)
     if not path:
@@ -2981,7 +2703,7 @@ def cmd_formulas(message):
         return
     topic = args[2].strip() if len(args) > 2 else ""
     if limit_reached(uid):
-        bot.reply_to(message, f"Безкоштовний денний ліміт ({DAILY_LIMIT}) вичерпано. Додаткові запити: /support")
+        bot.reply_to(message, f"Безкоштовний денний ліміт ({DAILY_LIMIT}) вичерпано. Спробуй завтра.")
         return
     path = book_path(subject)
     if not path:
@@ -3173,7 +2895,7 @@ def on_text(message):
                                         "short", "detail", "normal", "quick", "reset",
                                         "subscribe", "unsubscribe", "help", "class", "cards",
                                         "proofread", "remind", "pomodoro", "exam", "formulas",
-                                        "id", "menu", "support", "donate", "paysupport", "terms"], n=1, cutoff=0.6)
+                                        "id", "menu"], n=1, cutoff=0.6)
         hint = f" Можливо, ти мав на увазі /{close[0]}?" if close else ""
         bot.reply_to(message, f"Не знаю такої команди.{hint}\nСписок: /help")
         return
@@ -3270,17 +2992,15 @@ if __name__ == "__main__":
             log.exception("Ошибка inline")
     @bot.callback_query_handler(func=lambda call: bool(call.data))
     def on_unhandled_callback(call):
-        prefix = call.data.split(":", 1)[0] if call.data else "empty"
-        log.warning("Unhandled callback query: prefix=%s", prefix)
         bot.answer_callback_query(
             call.id,
-            "\u041a\u043d\u043e\u043f\u043a\u0430 \u0437\u0430\u0441\u0442\u0430\u0440\u0456\u043b\u0430. \u0412\u0456\u0434\u043a\u0440\u0438\u0439 /support \u0456 \u0441\u043f\u0440\u043e\u0431\u0443\u0439 \u0449\u0435 \u0440\u0430\u0437.",
+            "\u0426\u044f \u043a\u043d\u043e\u043f\u043a\u0430 \u0431\u0456\u043b\u044c\u0448\u0435 \u043d\u0435 \u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430. \u041d\u0430\u043f\u0438\u0448\u0438 /help.",
             show_alert=True,
         )
 
     while True:
         try:
-            bot.infinity_polling(skip_pending=not payments_enabled())
+            bot.infinity_polling(skip_pending=True)
         except Exception:
             log.exception("Polling упал, перезапуск через 10 сек")
             time.sleep(3)
