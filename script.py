@@ -9,6 +9,7 @@ import random
 import re
 import threading
 import time
+import urllib.request
 from functools import lru_cache
 from collections import Counter, defaultdict, OrderedDict
 from concurrent.futures import ThreadPoolExecutor
@@ -2937,6 +2938,19 @@ def run_web():
         log.exception("Веб-сервер не запустился (порт %s)", port)
 
 
+def self_ping():
+    """Каждые 10 мин стучится в свой health-URL, чтобы Render не засыпал."""
+    url = os.environ.get("SELF_PING_URL", "")
+    if not url:
+        return
+    while True:
+        time.sleep(600)
+        try:
+            urllib.request.urlopen(url, timeout=15)
+        except Exception:
+            pass
+
+
 # ===========================================================================
 # Запуск
 # ===========================================================================
@@ -2994,6 +3008,7 @@ def on_unhandled_callback(call):
 
 if __name__ == "__main__":
     threading.Thread(target=run_web, daemon=True).start()
+    threading.Thread(target=self_ping, daemon=True).start()
     threading.Thread(target=preload_books, daemon=True).start()
     threading.Thread(target=broadcast_loop, daemon=True).start()
     threading.Thread(target=daily_loop, daemon=True).start()
