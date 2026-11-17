@@ -2,6 +2,7 @@
 .venv312/
 .idea/
 data/
+cache/
 __pycache__/
 .env
 *.env
