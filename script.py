@@ -10,8 +10,9 @@ import re
 import threading
 import time
 from functools import lru_cache
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, OrderedDict
 from concurrent.futures import ThreadPoolExecutor
+import math
 from bs4 import BeautifulSoup
 from datetime import datetime, timezone, timedelta
 
@@ -29,6 +30,63 @@ from telebot import types as tg
 from google import genai
 from google.genai import types as gt
 from pypdf import PdfReader
+
+
+class LRU:
+    """Bounded thread-safe LRU cache.
+
+    Replaces every ad-hoc ``dict`` + ``_trim`` pattern that is NOT thread-safe
+    (``RuntimeError: dict changed size`` when two threads trim concurrently).
+    """
+
+    def __init__(self, maxsize):
+        self.d = OrderedDict()
+        self.n = maxsize
+        self.l = threading.RLock()
+
+    def get(self, key, default=None):
+        with self.l:
+            if key in self.d:
+                self.d.move_to_end(key)
+                return self.d[key]
+            return default
+
+    def set(self, key, value):
+        with self.l:
+            self.d[key] = value
+            self.d.move_to_end(key)
+            while len(self.d) > self.n:
+                self.d.popitem(last=False)
+
+    def pop(self, key, default=None):
+        with self.l:
+            return self.d.pop(key, default)
+
+    def __contains__(self, key):
+        with self.l:
+            return key in self.d
+
+    def __len__(self):
+        with self.l:
+            return len(self.d)
+
+    def clear(self):
+        with self.l:
+            self.d.clear()
+
+    def items(self):
+        with self.l:
+            return list(self.d.items())
+
+    def keys(self):
+        with self.l:
+            return list(self.d.keys())
+
+    def values(self):
+        with self.l:
+            return list(self.d.values())
+
+
 # ===========================================================================
 # Настройки - ВСЕ секреты только через переменные окружения (Render -> Environment)
 # ===========================================================================
@@ -85,6 +143,8 @@ SUBJECTS = {
     "укрмов": "укр мова.pdf",
     "физика": "фізика.pdf",
     "химия": "хімія.pdf",
+    "entrepreneurship": "підприємництво.pdf",
+    "technology": "технології.pdf",
 }
 
 SUBJECT_LABELS_UA = {
@@ -92,6 +152,8 @@ SUBJECT_LABELS_UA = {
     "геометрия": "Геометрія", "зарубежка": "Зарубіжна література",
     "история": "Історія", "музыка": "Музика", "укрлит": "Українська література",
     "укрмов": "Українська мова", "физика": "Фізика", "химия": "Хімія",
+    "entrepreneurship": "Підприємництво і фінансова грамотність",
+    "technology": "Технології",
 }
 
 def subject_label(subject):
@@ -101,7 +163,8 @@ ALIASES = {
     "фізика": "физика", "хімія": "химия", "біологія": "биология",
     "географія": "география", "геометрія": "геометрия", "історія": "история",
     "музика": "музыка", "укрмова": "укрмов", "укрліт": "укрлит",
-    "зарубіжка": "зарубежка",
+    "зарубіжка": "зарубежка", "підприємництво": "entrepreneurship",
+    "технології": "technology", "підприємництво і фінансова грамотність": "entrepreneurship",
 }
 
 SYSTEM_BASE = (
@@ -111,7 +174,7 @@ SYSTEM_BASE = (
     "<b>жирний</b> для головної відповіді, <i>курсив</i>, <code>формули</code>. "
     "Інші теги та Markdown не використовуй. Символи < і > у формулах пиши словами "
     "(«менше», «більше») або як ≤ ≥. Розділяй блоки порожніми рядками. "
-    "Відповідай ЛИШЕ УКРАЇНСЬКОЮ МОВОЮ. Якщо користувач прямо просить іншу мову, використовуй її лише для цього запиту."
+    "Відповідай ЛИШЕ УКРАЇНСЬКОЮ МОВОЮ. Якщо користувач прямо просить іншу мову, використовуй її лише для цього запиту.  "
     "Якщо потрібного завдання у фрагментах немає — НЕ відмовляйся відповідати й "
     "не міркуй про те, чого немає в підручнику: розв’яжи за загальними знаннями та правилами теми, "
     "зазначивши це ОДНИМ коротким рядком на початку: «📌 Умови в підручнику не знайдено — "
@@ -248,7 +311,7 @@ def on_similar(call):
             f"Фрагменти підручника:\n{context or '(немає)'}\n\n"
             f"Завдання учня:\n{task}\n\n"
             "Придумай ПОДІБНЕ завдання на те саме правило, але з іншими числами та умовою. "
-            "Сначала приведи условие новой задачи, затем строку «РОЗВ’ЯЗАННЯ:» и краткое решение с ответом."
+            "Спочатку наведи умову нового завдання, потім рядок «РОЗВ’ЯЗАННЯ:» і коротке розв’язання з відповіддю."
         )
         answer = call_gemini([prompt], system_instruction=SYSTEM_BASE, temperature=0.7)
         if not answer:
@@ -288,7 +351,7 @@ def on_rewrite(call):
             "Ось завдання учня та готовий розв’язок:\n\n"
             f"ЗАВДАННЯ:\n{task}\n\nРОЗВ’ЯЗАННЯ:\n{answer}\n\n"
             "Перепиши цей розв’язок так, ніби учень сам записав його в зошит: "
-            "прості живі фрази, можна від першої особи («сначала находим...», «получается...»). "
+            "прості живі фрази, можна від першої особи («спочатку знаходимо...», «отримуємо...»). "
             "ОБОВ’ЯЗКОВО зберігай ВСІ кроки обчислень і проміжні результати — "
             "скорочуй лише словесну воду, а не математичні обчислення. "
             "Якщо в розв’язанні є опис креслення/рисунка словами (дано, знайти, побудова) — збережи структуру. "
@@ -316,30 +379,27 @@ def on_rewrite(call):
 settings = defaultdict(lambda: {"length": "normal", "subject": None})
 history = defaultdict(list)       # uid -> [(вопрос, ответ), ...]
 pending = {}                      # uid -> отложенный запрос (ждём выбор предмета)
-ANSWER_CACHE = {}
+ANSWER_CACHE = LRU(int(os.environ.get("ANSWER_CACHE_MAX", "1200")))
 ANSWER_CACHE_LOCK = threading.RLock()
 _INFLIGHT = {}
 _INFLIGHT_LOCK = threading.Lock()
-_AUTO_CACHE = {}
+_AUTO_CACHE = LRU(2000)
 _AUTO_CACHE_LOCK = threading.Lock()
-_CONTEXT_CACHE = {}
+_CONTEXT_CACHE = LRU(int(os.environ.get("CONTEXT_CACHE_MAX", "1500")))
 _CONTEXT_CACHE_LOCK = threading.Lock()
-_CACHE_MAX = int(os.environ.get("ANSWER_CACHE_MAX", "1200"))
-_CONTEXT_CACHE_MAX = int(os.environ.get("CONTEXT_CACHE_MAX", "1500"))
-FB_CACHE = {}       # отзывы по кнопкам 👍/👎
-SIM_CACHE = {}      # для кнопки «🔁 Подібне завдання»
-
-
-def _trim(d, limit=300):
-    while len(d) > limit:
-        d.pop(next(iter(d)))
+FB_CACHE = LRU(100)       # отзывы по кнопкам 👍/👎
+SIM_CACHE = LRU(100)      # для кнопки «🔁 Подібне завдання»
+REWRITE_CACHE = LRU(100)  # token -> (задание, полный ответ) для кнопки «Своими словами»
+HW_CACHE = LRU(50)        # token -> [(предмет, текст задания), ...]
+QDAY_CACHE = LRU(50)      # token -> ответ
+INLINE_CACHE = LRU(200)
 last_request = {}                 # uid -> время последнего запроса
 START_TIME = time.time()
 FB_LOG = []            # даты всех 👎 — для ежедневного отчёта
 REMINDS_MEM = []       # напоминания, если Redis не подключён
 POMODORO = {}          # uid -> таймеры помидорки
 HW_DONE = {}           # token -> {номера выполненных заданий}
-REWRITE_CACHE = {}     # token -> (задание, полный ответ) для кнопки «Своими словами»
+DOCS = LRU(50)         # uid -> {"text": ..., "question": ...} контекст учителя
 
 # ===========================================================================
 # Статистика и лимиты
@@ -347,12 +407,10 @@ REWRITE_CACHE = {}     # token -> (задание, полный ответ) дл
 KV_URL = os.environ.get("UPSTASH_REDIS_REST_URL", "").rstrip("/")
 KV_TOKEN = os.environ.get("UPSTASH_REDIS_REST_TOKEN", "")
 log.info("Redis (Upstash): %s", "подключён" if (KV_URL and KV_TOKEN) else "НЕ подключён — расписания/статистика только в памяти!")
-_kv_skip_save = set()  # ключи, которые не удалось прочитать: их не перезаписываем, чтобы не стереть данные
 
 
 def kv_enabled():
     return bool(KV_URL and KV_TOKEN)
-
 
 
 def _kv(cmd):
@@ -362,6 +420,8 @@ def _kv(cmd):
 
 
 def kv_load(key, default):
+    if not kv_enabled():
+        return default
     for attempt in range(3):
         try:
             raw = _kv(["GET", key])
@@ -369,13 +429,12 @@ def kv_load(key, default):
         except Exception:
             log.warning("Redis: не удалось прочитать %s (попытка %d из 3)", key, attempt + 1)
             time.sleep(2)
-    _kv_skip_save.add(key)
     log.error("Redis недоступен: %s не будет сохраняться до перезапуска бота", key)
     return default
 
 
 def kv_save(key, value):
-    if key in _kv_skip_save:
+    if not kv_enabled():
         return False
     try:
         _kv(["SET", key, json.dumps(value, ensure_ascii=False)])
@@ -399,13 +458,19 @@ def _load_local_stats():
 
 def _load_stats():
     if kv_enabled():
-        remote = kv_load("hwbot:stats", None)
-        if remote is not None:
-            return remote
+        try:
+            remote = kv_load("hwbot:stats", None)
+            if remote is not None:
+                return remote
+        except Exception:
+            log.warning("Redis: не удалось загрузить статистику, используем локальную")
         local = _load_local_stats()
-        if "hwbot:stats" not in _kv_skip_save and local.get("users"):
-            if kv_save("hwbot:stats", local):
-                log.info("Перенесена локальная статистика в Redis")
+        if local.get("users"):
+            try:
+                if kv_save("hwbot:stats", local):
+                    log.info("Перенесена локальная статистика в Redis")
+            except Exception:
+                pass
         return local
     return _load_local_stats()
 
@@ -430,7 +495,7 @@ def _flush_stats(force=False):
     try:
         if kv_enabled():
             if not kv_save("hwbot:stats", snapshot):
-                raise RuntimeError("Не вдалося зберегти статистику в Redis")
+                log.warning("Redis: не удалось сохранить статистику")
         else:
             tmp = STATS_FILE + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
@@ -442,29 +507,86 @@ def _flush_stats(force=False):
         log.exception("Не удалось сохранить статистику")
 
 def register_use(uid, name):
+    """Атомарный счётчик через Redis (HINCRBY) + локальный fallback."""
+    day = datetime.now(KYIV).date().isoformat()
+    k = f"hwbot:day:{day}"
+    try:
+        if kv_enabled():
+            _kv(["HINCRBY", k, str(uid), 1])
+            _kv(["EXPIRE", k, 90 * 86400])
+            return
+    except Exception:
+        log.exception("kv_register")
+    # Локальный fallback
     global _stats_dirty
-    today = datetime.now(KYIV).date().isoformat()
     with _stats_lock:
         u = stats["users"].setdefault(
             str(uid), {"name": name, "total": 0, "days": {}}
         )
         u["name"] = name
         u["total"] += 1
-        used = u["days"].get(today, 0)
-        u["days"][today] = used + 1
+        used = u["days"].get(day, 0)
+        u["days"][day] = used + 1
         _stats_dirty = True
-    # Запись в Redis/диск никогда не тормозит ответ ученику.
     if time.time() - _stats_last_flush >= _STATS_FLUSH_SECONDS:
         threading.Thread(target=_flush_stats, daemon=True).start()
 
 
 def used_today(uid):
+    day = datetime.now(KYIV).date().isoformat()
+    k = f"hwbot:day:{day}"
+    try:
+        if kv_enabled():
+            val = _kv(["HGET", k, str(uid)])
+            return int(val) if val else 0
+    except Exception:
+        pass
     u = stats["users"].get(str(uid))
-    return u["days"].get(datetime.now(KYIV).date().isoformat(), 0) if u else 0
+    return u["days"].get(day, 0) if u else 0
 
 
 def limit_reached(uid):
     return uid != ADMIN_ID and used_today(uid) >= DAILY_LIMIT
+
+# ===========================================================================
+# Атомарные одноразовые флаги (Redis SET NX EX)
+# ===========================================================================
+_once_mem = set()                 # локальные одноразовые флаги (если Redis не подключён)
+
+
+def once(name):
+    """Возвращает True ровно один раз в календарный день (по Киеву).
+
+    Атомарный флаг: Redis SET NX EX (выживает перезапуск),
+    локальный fallback — set() в памяти.
+    Используется для ежедневных рассылок/отчётов/вопроса дня.
+    """
+    key = f"hwbot:once:{name}:{datetime.now(KYIV).date().isoformat()}"
+    if not kv_enabled():
+        if key in _once_mem:
+            return False
+        _once_mem.add(key)
+        return True
+    try:
+        return _kv(["SET", key, "1", "NX", "EX", 172800]) == "OK"
+    except Exception:
+        return True  # при сбое Redis — не блокируем
+
+
+def _load_flag(key, default):
+    """Чтение одноразового флага (совместимость)."""
+    if kv_enabled():
+        return kv_load(key, default)
+    return key in _once_mem if _once_mem else default
+
+
+def _save_flag(key, value):
+    """Запись одноразового флага (совместимость)."""
+    if kv_enabled():
+        kv_save(key, value)
+    else:
+        _once_mem.add(key)
+
 
 # ===========================================================================
 # Безопасная отправка ответов (HTML Telegram)
@@ -484,7 +606,8 @@ def sanitize_html(text):
 
 
 def strip_tags(text):
-    return re.sub(r"<[^>]+>", "", html.unescape(text))
+    """Убираем теги: сначала раскрываем HTML-сущности, потом обрезаем теги."""
+    return re.sub(r"<[^>]+>", "", html.unescape(text or ""))
 
 
 def split_message(text, limit=TG_LIMIT):
@@ -505,18 +628,18 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 def send_answer(chat_id, status_msg, text, uid=None, task=None, subject=None):
     """Сначала пробует HTML; если Telegram не принял разметку - шлёт чистым текстом."""
+    token = uuid.uuid4().hex[:8]
 
     markup = InlineKeyboardMarkup()
-    if uid:
-        token = uuid.uuid4().hex[:8]
-        FB_CACHE[token] = {"uid": uid, "task": (task or "")[:500], "answer": text[:2000]}
-        _trim(FB_CACHE, 100)
+    if uid in history and history[uid] and history[uid][-1][1] == "PENDING":
+        history[uid][-1] = (task or history[uid][-1][0], text)
+        if len(history[uid]) > HISTORY_TURNS:
+            history[uid] = history[uid][-HISTORY_TURNS:]
+        FB_CACHE.set(token, {"uid": uid, "task": (task or "")[:500], "answer": text[:2000]})
         if subject and task:
-            SIM_CACHE[token] = (subject, task[:500])
-            _trim(SIM_CACHE, 100)
+            SIM_CACHE.set(token, (subject, task[:500]))
             markup.add(InlineKeyboardButton("🔁 Подібне завдання", callback_data=f"similar:{token}"))
-            REWRITE_CACHE[token] = (task[:1500], text[:2500])
-            _trim(REWRITE_CACHE, 100)
+            REWRITE_CACHE.set(token, (task[:1500], text[:2500]))
             markup.add(InlineKeyboardButton("✍️ Своїми словами", callback_data=f"rw:{token}"))
         markup.row(InlineKeyboardButton("👍", callback_data=f"fb:ok:{token}"),
                    InlineKeyboardButton("👎", callback_data=f"fb:bad:{token}"))
@@ -617,14 +740,34 @@ def page_index(pdf_path):
     return idx
 
 
+_idf_cache = {}
+_idf_lock = threading.Lock()
+
+
+def _idf(path):
+    """BM25-подобный IDF для каждого термина."""
+    with _idf_lock:
+        if path not in _idf_cache:
+            idx = page_index(path)
+            n = len(idx)
+            df = Counter(s for c in idx for s in c)
+            _idf_cache[path] = {
+                s: math.log(1 + (n - d + 0.5) / (d + 0.5))
+                for s, d in df.items()
+            }
+        return _idf_cache[path]
+
+
 def score_pages(pdf_path, task, use_numbers=True):
     pages = load_pages(pdf_path)
     index = page_index(pdf_path)
     query = set(stems(task))
+    idf = _idf(pdf_path)
     numbers = re.findall(r"\d+(?:[.,]\d+)?", task) if use_numbers else []
     scored = []
     for i, counts in enumerate(index):
-        score = sum(min(counts[s], 5) for s in query)
+        # BM25-подобный вес: IDF * минимальная частота (cap 5)
+        score = sum(idf.get(s, 0) * min(counts[s], 5) for s in query)
         page = pages[i]
         for n in numbers:
             # "56." или "56)" в начале строки учебника = номер задачи, самый сильный сигнал
@@ -645,7 +788,7 @@ def find_context(pdf_path, task):
         if hit is not None:
             return hit
     pages = load_pages(pdf_path)
-    best = sorted(i for sc, i in score_pages(pdf_path, task)[:TOP_PAGES] if sc >= 10)
+    best = sorted(i for sc, i in score_pages(pdf_path, task)[:TOP_PAGES] if sc >= 5)
     chunks, used, total = [], [], 0
     for i in best:
         chunk = f"[Страница {i + 1}]\n{pages[i]}"
@@ -653,18 +796,15 @@ def find_context(pdf_path, task):
             break
         chunks.append(chunk); used.append(i + 1); total += len(chunk)
     result = ("\n\n".join(chunks), used)
-    with _CONTEXT_CACHE_LOCK:
-        if len(_CONTEXT_CACHE) >= _CONTEXT_CACHE_MAX:
-            _CONTEXT_CACHE.pop(next(iter(_CONTEXT_CACHE)), None)
-        _CONTEXT_CACHE[key] = result
+    _CONTEXT_CACHE.set(key, result)
     return result
 
 
 def auto_detect(task):
     key = normalize_task(task)
-    with _AUTO_CACHE_LOCK:
-        if key in _AUTO_CACHE:
-            return _AUTO_CACHE[key]
+    hit = _AUTO_CACHE.get(key)
+    if hit is not None:
+        return hit
     best, best_score = None, 0
     for key_name, fname in SUBJECTS.items():
         path = os.path.join(BOOKS_DIR, fname)
@@ -673,11 +813,8 @@ def auto_detect(task):
         score = sum(sc for sc, _ in score_pages(path, task, use_numbers=False)[:3])
         if score > best_score:
             best, best_score = key_name, score
-    result = best if best_score >= 10 else None
-    with _AUTO_CACHE_LOCK:
-        if len(_AUTO_CACHE) >= 2000:
-            _AUTO_CACHE.pop(next(iter(_AUTO_CACHE)), None)
-        _AUTO_CACHE[key] = result
+    result = best if best_score >= 5 else None
+    _AUTO_CACHE.set(key, result)
     return result
 
 
@@ -712,6 +849,7 @@ _key_blocked = {}   # ключ -> время, до которого он счи�
 _key_lock = threading.Lock()
 _clients = {}
 _clients_lock = threading.Lock()
+_GEMINI_SEM = threading.BoundedSemaphore(int(os.environ.get("GEMINI_CONCURRENCY", "8")))
 GEMINI_RETRIES = int(os.environ.get("GEMINI_RETRIES", "1"))
 
 def _get_client(api_key):
@@ -736,8 +874,8 @@ def ordered_keys():
 def call_gemini(contents, system_instruction=None, json_mode=False, temperature=0.3):
     cfg = {
         "temperature": temperature,
-        # Не просим модель генерировать лишнее — это уменьшает задержку.
         "max_output_tokens": int(os.environ.get("GEMINI_MAX_OUTPUT_TOKENS", "2048")),
+        "thinking_config": gt.ThinkingConfig(thinking_budget=-1),
     }
     if system_instruction:
         cfg["system_instruction"] = system_instruction
@@ -757,21 +895,29 @@ def call_gemini(contents, system_instruction=None, json_mode=False, temperature=
             for attempt in range(GEMINI_RETRIES + 1):
                 t0 = time.time()
                 try:
-                    r = gclient.models.generate_content(
-                        model=model,
-                        contents=contents,
-                        config=gt.GenerateContentConfig(**cfg),
-                    )
-                    log.info("Ключ #%d, %s ответила за %.2f сек", idx, model, time.time() - t0)
-                    return r.text or None
+                    with _GEMINI_SEM:
+                        r = gclient.models.generate_content(
+                            model=model,
+                            contents=contents,
+                            config=gt.GenerateContentConfig(**cfg),
+                        )
+                    elapsed = time.time() - t0
+                    # Проверяем r.text — safety или пустой ответ возвращает None без перебора ключей
+                    text = r.text if hasattr(r, "text") and r.text else None
+                    if text:
+                        log.info("Ключ #%d, %s ответила за %.2f сек", idx, model, elapsed)
+                        return text
+                    log.warning("Ключ #%d, %s: пустой ответ (safety/обрезка)", idx, model)
                 except Exception as e:
                     last_error = e
                     err = str(e)
+                    is_daily = "PerDay" in err or "per day" in err.lower()
                     log.warning("Ключ #%d | %s | попытка %d: %s",
                                 idx, model, attempt + 1, err[:200])
                     if "429" in err or "RESOURCE_EXHAUSTED" in err:
+                        block_time = 3600 if is_daily else 30
                         with _key_lock:
-                            _key_blocked[api_key] = time.time() + 30
+                            _key_blocked[api_key] = time.time() + block_time
                         break
                     if any(code in err for code in ("400", "401", "403", "404")):
                         break
@@ -804,8 +950,12 @@ def build_prompt(mode, context, task, uid):
     mode_text = MODE_INSTR[mode]
     if settings[uid]["length"] == "quick" and mode == "answer":
         mode_text = "Дай лише підсумкову відповідь, без пояснень."
+    doc_entry = DOCS.get(uid)
+    doc = f"Документ від учителя:\n{doc_entry['text'][:MAX_PDF_CHARS]}\n\n" \
+          if doc_entry and time.time() - doc_entry.get("ts", 0) < 1800 else ""
     return (
         f"Фрагменти підручника:\n{context or '(відповідних фрагментів не знайдено)'}\n\n"
+        + doc
         + (f"Попередній діалог:\n{hist}\n\n" if hist else "")
         + f"Твоє завдання: {mode_text}\n\nПовідомлення учня: {task}"
     )
@@ -850,10 +1000,13 @@ def subjects_keyboard():
 
 
 def gate(message, cooldown=True):
-    """Проверка доступа и антиспама."""
+    """Проверка доступа, антиспама и адресованности (в группах)."""
     uid = message.from_user.id
     if ALLOWED_IDS and uid not in ALLOWED_IDS and uid != ADMIN_ID:
         bot.reply_to(message, f"У тебе немає доступу до бота. Твій ID: {uid}")
+        return False
+    # В группових чатах бот реагує тільки коли його прямо address (mention/reply)
+    if not addressed(message):
         return False
     if cooldown:
         now = time.time()
@@ -880,45 +1033,25 @@ def book_path(subject):
     # Розклад и обработчики домашки (ВЫНЕСЕНО ИЗ PROCESS НАВЕРХ)
     # ===========================================================================
 
-# Класы школы: имя -> ID на сайте sch3.edu.vn.ua
+# Класы школы: имя -> ID на сайте sch3.edu.vn.ua (только 8-Б)
 CLASSES = {
-"10-А": "31",
-"10-Б": "33",
-"11-А": "34",
-"11-Б": "28",
-"1-А": "1",
-"1-Б": "2",
-"1-В": "5",
-"2-А": "6",
-"2-Б": "7",
-"2-В": "8",
-"3-А": "9",
-"3-Б": "10",
-"3-В": "11",
-"4-А": "12",
-"4-Б": "13",
-"4-В": "14",
-"5-А": "15",
-"5-Б": "16",
-"5-В": "17",
-"6-А": "18",
-"6-Б": "19",
-"6-В": "29",
-"7-А": "20",
-"7-Б": "21",
-"7-В": "22",
-"8-А": "23",
 "8-Б": "24",
-"8-В": "30",
-"9-А": "25",
-"9-Б": "26",
-"9-В": "32",
 }
 DEFAULT_CLASS = "8-Б"
-SCHEDULES = {}   # все расписания теперь через /setschedule (Redis)
-# у классов без расписания бот покажет все свежие задания с сайта
+# Розклад 8-Б виведений із реальних домашніх завдань (листопад 2026)
+SCHEDULES = {
+    "8-Б": {
+        "0": ["Географія", "Підприємництво і фінансова грамотність", "Біологія", "Фізика і астрономія", "Геометрія", "Українська література"],
+        "1": ["Інформатика", "Фізика і астрономія", "Українська мова", "Історія України", "Алгебра", "Англійська мова"],
+        "2": ["Технології", "Алгебра", "Англійська мова", "Інформатика", "Зарубіжна література", "Здоров'я, безпека та добробут"],
+        "3": ["Хімія", "Українська мова", "Англійська мова", "Географія", "Українська література", "Історія України", "Фізична культура"],
+        "4": ["Англійська мова", "Українська мова", "Алгебра", "Історія України", "Зарубіжна література"],
+    }
+}
 @bot.message_handler(commands=['hw'])
 def hw_menu(message):
+    if not gate(message, cooldown=False):
+        return
     markup = InlineKeyboardMarkup()
     markup.add(InlineKeyboardButton("📅 На завтра", callback_data="hw_auto"))
     markup.row(InlineKeyboardButton("ПН", callback_data="hw_0"),
@@ -964,69 +1097,18 @@ def http_session():
     return session
 
 # ===========================================================================
-# Автоматизация классов: автопоиск с сайта, /addclass, расписания из Redis
+# Автоматичне розкладання: розклад задано в коді,/site не використовується
 # ===========================================================================
-_EXTRA_CLASSES_MEM = {}
-_SCHED_MEM = {}
-
-
-def discover_classes():
-    """Тянет список классов (имя -> ID) с выпадающего списка сайта школы."""
-    try:
-        r = http_session().get("https://sch3.edu.vn.ua/disted", timeout=HTTP_TIMEOUT)
-        r.encoding = 'utf-8'
-        soup = BeautifulSoup(r.text, 'html.parser')
-        found = {}
-        for sel in soup.find_all('select'):
-            for o in sel.find_all('option'):
-                val = (o.get('value') or '').strip()
-                name = canon_class(o.text.strip())
-                if val.isdigit() and re.fullmatch(r"\d{1,2}-?[А-ЯІЇЄҐ]{1,2}", name):
-                    found[name] = val
-        log.info("Сайт: найдено классов: %d", len(found))
-        return found
-    except Exception:
-        log.warning("Сайт: не удалось автообнаружить классы — работает ручной CLASSES")
-        return {}
-
-
-def site_subjects(class_name):
-    """Названия предметов, которые встречаются на сайте у этого класса."""
-    class_id = CLASSES.get(class_name)
-    if not class_id:
-        return []
-    try:
-        response = requests.post("https://sch3.edu.vn.ua/disted",
-                                 data={'class': class_id}, headers=HEADERS, timeout=10)
-        response.encoding = 'utf-8'
-        soup = BeautifulSoup(response.text, 'html.parser')
-        subs = []
-        for row in soup.find_all('tr'):
-            cols = row.find_all('td')
-            if len(cols) >= 5:
-                s = cols[3].text.strip()
-                if s and s not in subs:
-                    subs.append(s)
-        return subs
-    except Exception:
-        log.exception("Не удалось получить предметы с сайта для %s", class_name)
-        return []
-
-
 def _merge_classes_and_schedules():
-    for k, v in discover_classes().items():
-        CLASSES.setdefault(k, v)          # ручные записи кода не перебиваем
-    extras = kv_load("hwbot:extra_classes", {}) if kv_enabled() else _EXTRA_CLASSES_MEM
-    for k, v in (extras or {}).items():
-        CLASSES[canon_class(k)] = v
-    saved = kv_load("hwbot:schedules", {}) if kv_enabled() else _SCHED_MEM
-    for k, v in (saved or {}).items():
-        if isinstance(v, dict) and v:
-            SCHEDULES[canon_class(k)] = v
+    pass
 
 
 def fetch_task_text(url):
-    """Достаёт текст после заголовка 'Домашнє завдання' до новостей/подвала сайта."""
+    """Достаёт текст после заголовка 'Домашнє завдання' до новостей/подвала сайта.
+    Результат кэшируется 10 минут, чтобы не дёргать сайт повторно."""
+    cached = _TASK_CACHE.get(url)
+    if cached and time.time() - cached[0] < 600:
+        return cached[1]
     try:
         r = http_session().get(url, timeout=HTTP_TIMEOUT)
         r.encoding = 'utf-8'
@@ -1047,10 +1129,16 @@ def fetch_task_text(url):
             if s:
                 cut = min(cut, s.start())
 
-        return text[:cut].strip()
+        result = text[:cut].strip()
+        _TASK_CACHE[url] = (time.time(), result)
+        # _TASK_CACHE — упрощённый dict (TTL 10 мин, редкие вызовы), без LRU
+        return result
     except Exception:
         log.exception("Не удалось открыть %s", url)
         return ""
+
+_TASK_CACHE = {}  # url -> (ts, text) — кэш fetch_task_text на 10 мин
+
 
 def is_future(lesson_date):
     """True, если дата урока (дд.мм.гггг) позже сегодняшней по Киеву."""
@@ -1073,24 +1161,21 @@ def next_school_day():
 # Если предмета тут нет (англ., информатика, физкультура...), решаем без учебника.
 SUBJECT_KEYS = {
     "Алгебра": "алгебра",
+    "Англійська мова": "none",
     "Біологія": "биология",
     "Географія": "география",
     "Геометрія": "геометрия",
     "Зарубіжна література": "зарубежка",
-    "Всесвітня історія": "история",
     "Історія України": "история",
     "Мистецтво": "музыка",
     "Українська література": "укрлит",
     "Українська мова": "укрмов",
     "Фізика і астрономія": "физика",
     "Хімія": "химия",
+    "Підприємництво і фінансова грамотність": "entrepreneurship",
+    "Технології": "technology",
+    "Здоров'я, безпека та добробут": "none",
 }
-# Свои учебники по классам. Класу нет в словаре или словарь пустой = решаем без учебников.
-SUBJECT_KEYS_BY_CLASS = {
-    "6-В": {},   # пока нет учебников за 6 класс - всё по общим знаниям
-}
-# Класы без учебников: по предметам не из mapping бот просит фото задания
-CLASSES_WITHOUT_BOOKS = {k for k, v in SUBJECT_KEYS_BY_CLASS.items() if not v}
 # Латинские буквы, похожие на кириллицу (A B C E H K M O P T X), приводим к кириллице.
 # Защита от невидимого бага: "6-В" в CLASSES и SCHEDULES набраны разными алфавитами.
 _HOMO = str.maketrans("ABCEHKMOPTX", "АВСЕНКМОРТХ")
@@ -1103,22 +1188,17 @@ def canon_class(name):
 
 CLASSES = {canon_class(k): v for k, v in CLASSES.items()}
 SCHEDULES = {canon_class(k): v for k, v in SCHEDULES.items()}
-SUBJECT_KEYS_BY_CLASS = {canon_class(k): v for k, v in SUBJECT_KEYS_BY_CLASS.items()}
 DEFAULT_CLASS = canon_class(DEFAULT_CLASS)
-CLASSES_WITHOUT_BOOKS = {k for k, v in SUBJECT_KEYS_BY_CLASS.items() if not v}
+
+
 def _validate_classes():
     for _name in SCHEDULES:
         if _name not in CLASSES:
-            log.warning("SCHEDULES: класс %r отсутствует в CLASSES - проверь буквы (кириллица/латиница)!", _name)
-    for _name in SUBJECT_KEYS_BY_CLASS:
-        if _name not in CLASSES:
-            log.warning("SUBJECT_KEYS_BY_CLASS: класс %r отсутствует в CLASSES!", _name)
+            log.warning("SCHEDULES: класс %r отсутствует в CLASSES - проверь буквы (кириллица/latinica)!", _name)
 
 
 _validate_classes()
-threading.Thread(target=_merge_classes_and_schedules, daemon=True).start()
 
-HW_CACHE = {}  # token -> [(предмет, текст задания), ...]; живёт в памяти, до перезапуска бота
 
 def _hw_kb(token, items, delete_data="delete_msg"):
     done = HW_DONE.setdefault(token, set())
@@ -1137,9 +1217,7 @@ def _hw_kb(token, items, delete_data="delete_msg"):
 def hw_markup(items, delete_data="delete_msg"):
     """Кнопки '✏️ Предмет' (решить), '✅' (выполнено) и кнопка удаления."""
     token = uuid.uuid4().hex[:8]
-    HW_CACHE[token] = items
-    while len(HW_CACHE) > 50:  # храним последние 50 списков
-        HW_CACHE.pop(next(iter(HW_CACHE)))
+    HW_CACHE.set(token, items)
     return _hw_kb(token, items, delete_data)
 
 def build_hw_text(day_index, class_name=None):
@@ -1235,7 +1313,11 @@ def on_solve(call):
         return
     try:
         _, token, idx = call.data.split(":")
-        subject_ua, task_text = HW_CACHE[token][int(idx)]
+        items = HW_CACHE.get(token)
+        if not items:
+            bot.answer_callback_query(call.id, "Список застарів, відкрий /hw ще раз.", show_alert=True)
+            return
+        subject_ua, task_text = items[int(idx)]
     except Exception:
         bot.answer_callback_query(call.id, "Список застарів, відкрий /hw ще раз.", show_alert=True)
         return
@@ -1245,18 +1327,9 @@ def on_solve(call):
         return
     last_request[uid] = now
 
-    keys = SUBJECT_KEYS_BY_CLASS.get(
-        user_class(call.message.chat.id), SUBJECT_KEYS)
+    keys = SUBJECT_KEYS
     subject = keys.get(subject_ua, "none")
-    if subject == "none" and user_class(call.message.chat.id) in CLASSES_WITHOUT_BOOKS:
-        bot.answer_callback_query(call.id)
-        bot.send_message(
-            call.message.chat.id,
-            f"📸 Для «{subject_ua}» у мене поки немає підручника для цього класу.\n"
-            "Надішли фото завдання наступним повідомленням — розв’яжу й поясню "
-            "(можна й просто написати текстом).")
-        return
-    bot.answer_callback_query(call.id, "Розв’язую…")
+    bot.answer_callback_query(call.id, "Розв'язую…")
     task = f"{subject_ua}. Домашнє завдання: {task_text[:1500]}"
     # Если в задании только номера без текста - предупредим, что условия могут не найтись
     if re.search(r"[№N]\s*№?\s*\d+|\d{1,3}\s*[,.-]\s*\d{1,3}", task_text) and len(task_text) < 120:
@@ -1272,8 +1345,11 @@ def on_hw_done(call):
     try:
         _, token, idx = call.data.split(":")
         idx = int(idx)
-        items = HW_CACHE[token]
+        items = HW_CACHE.get(token)
     except Exception:
+        bot.answer_callback_query(call.id, "Список застарів, відкрий /hw ще раз.", show_alert=True)
+        return
+    if not items:
         bot.answer_callback_query(call.id, "Список застарів, відкрий /hw ще раз.", show_alert=True)
         return
     done = HW_DONE.setdefault(token, set())
@@ -1464,16 +1540,16 @@ def send_daily():
 
 
 def broadcast_loop():
-    last_sent = None
+    """Рассылка: раз в сутки, в окно SEND_HOUR..SEND_HOUR+10 (по Киеву)."""
     start = SEND_HOUR * 60 + SEND_MINUTE
     while True:
         try:
             now = datetime.now(KYIV)
             minutes = now.hour * 60 + now.minute
             # окно 10 минут: если бот перезапустится позже, старую рассылку не шлём
-            if now.weekday() < 5 and start <= minutes < start + 10 and last_sent != now.date():
-                last_sent = now.date()
-                send_daily()
+            if now.weekday() < 5 and start <= minutes < start + 10:
+                if once("broadcast"):
+                    send_daily()
         except Exception:
             log.exception("Ошибка планировщика")
         time.sleep(20)
@@ -1509,6 +1585,9 @@ def process(chat_id, reply_to, uid, name, mode, subject, task, media):
                          reply_to_message_id=reply_to)
         return
 
+    register_use(uid, name)
+    history[uid].append((task, "PENDING"))
+
     status = bot.send_message(chat_id, "Шукаю відповідь у підручнику… ⏱️", reply_to_message_id=reply_to)
     bot.send_chat_action(chat_id, "typing")
 
@@ -1523,30 +1602,15 @@ def process(chat_id, reply_to, uid, name, mode, subject, task, media):
                 return
 
         auto_note = ""
-        general = False  # True = отвечаем без учебника
+        general = False  # True = відповідаємо без підручника
         if subject == "none":
             subject, general = None, True
         elif subject == "auto":
-            if user_class(chat_id) in CLASSES_WITHOUT_BOOKS:
-                general = True  # у класса нет наших учебников - отвечаем без них
+            subject = auto_detect(task)
+            if subject:
+                auto_note = f"📚 Предмет: {subject}\n\n"
             else:
-                subject = auto_detect(task)
-                if subject:
-                    auto_note = f"📚 Предмет: {subject}\n\n"
-                else:
-                    general = True
-
-        cache_key = None
-        if not media:
-            cache_key = hashlib.md5(
-                f"{subject}|{mode}|{settings[uid]['length']}|{normalize_task(task)}".encode("utf-8")
-            ).hexdigest()
-            with ANSWER_CACHE_LOCK:
-                cached = ANSWER_CACHE.get(cache_key)
-            if cached is not None:
-                send_answer(chat_id, status, cached, uid=uid, task=task,
-                            subject=subject if subject and subject != "none" else None)
-                return
+                general = True
 
         if general:
             context, pages = "", []
@@ -1566,16 +1630,17 @@ def process(chat_id, reply_to, uid, name, mode, subject, task, media):
             else:
                 context, pages = find_context(path, task)
         prompt = build_prompt(mode, context, task, uid)
-        cache_key = None
-        if not media:
-            cache_key = hashlib.md5(
-                f"{subject}|{mode}|{settings[uid]['length']}|{task}".encode("utf-8")
-            ).hexdigest()
-            if cache_key in ANSWER_CACHE:
-                send_answer(chat_id, status, ANSWER_CACHE[cache_key],
-                            uid=uid, task=task,
-                            subject=subject if subject and subject != "none" else None)
-                return
+        hist_sig = hashlib.md5(history_text(uid).encode()).hexdigest()[:8]
+        cache_key = None if media else hashlib.md5(
+            f"{subject}|{mode}|{settings[uid]['length']}|{normalize_task(task)}|{hist_sig}".encode()).hexdigest()
+        subj_arg = subject if subject and subject != "none" else None
+
+        def reply(text, raw=None):
+            register_use(uid, name)
+            history[uid].append((task, raw or text))
+            if len(history[uid]) > HISTORY_TURNS:
+                history[uid] = history[uid][-HISTORY_TURNS:]
+            send_answer(chat_id, status, text, uid=uid, task=task, subject=subj_arg)
         flight = None
         leader = True
         if cache_key:
@@ -1589,14 +1654,13 @@ def process(chat_id, reply_to, uid, name, mode, subject, task, media):
             if not leader:
                 flight["event"].wait(timeout=float(os.environ.get("INFLIGHT_TIMEOUT", "45")))
                 if flight["answer"] is not None:
-                    send_answer(chat_id, status, flight["answer"], uid=uid, task=task,
-                                subject=subject if subject and subject != "none" else None)
+                    reply(flight["answer"])
                     return
                 if flight["error"] is not None:
                     raise flight["error"]
 
         try:
-            answer = call_gemini(prompt, system_instruction=build_system(uid), temperature=0.25)
+            answer = call_gemini([prompt, *media], system_instruction=build_system(uid), temperature=0.25)
             if not answer:
                 raise RuntimeError("Gemini вернул пустой ответ")
         except Exception as exc:
@@ -1609,18 +1673,14 @@ def process(chat_id, reply_to, uid, name, mode, subject, task, media):
             raise
         full_text = auto_note + answer
         if cache_key:
-            with ANSWER_CACHE_LOCK:
-                ANSWER_CACHE[cache_key] = full_text
-                while len(ANSWER_CACHE) > _CACHE_MAX:
-                    ANSWER_CACHE.pop(next(iter(ANSWER_CACHE)), None)
+            ANSWER_CACHE.set(cache_key, full_text)
             if leader:
                 with _INFLIGHT_LOCK:
                     item = _INFLIGHT.pop(cache_key, None)
                     if item:
                         item["answer"] = full_text
                         item["event"].set()
-        send_answer(chat_id, status, full_text, uid=uid, task=task,
-                    subject=subject if subject and subject != "none" else None)
+        reply(full_text, answer)
 
     except Exception:
         log.exception("Ошибка обработки запроса")
@@ -1632,114 +1692,19 @@ def parse_json(raw):
     raw = re.sub(r"^```(?:json)?|```$", "", raw.strip(), flags=re.M).strip()
     return json.loads(raw)
 # ===========================================================================
-# /setschedule - расписание класса без правок кода (хранится в Redis)
+# /setschedule - розклад завантажується автоматично з коду (фіксований для 8-Б)
 # ===========================================================================
 @bot.message_handler(commands=["setschedule"])
 def cmd_setschedule(message):
-    if message.from_user.id != ADMIN_ID:
-        bot.reply_to(message, "Команда лише для адміністратора.")
-        return
-    parts = message.text.split(maxsplit=2)
-    cname_raw = parts[1] if len(parts) >= 2 else ""
-    text = parts[2].strip() if len(parts) >= 3 else ""
-    if not text and message.reply_to_message and message.reply_to_message.text:
-        text = message.reply_to_message.text
-    if not cname_raw:
-        bot.reply_to(message, "Так: /setschedule 6-В <текст розкладу>\n"
-                              "Або відповідай на повідомлення з розкладом: /setschedule 6-В")
-        return
-    if cname_raw.lower() in ("список", "list"):
-        mode = "Redis — переживе перезапуск" if kv_enabled() else "ПАМ’ЯТЬ (Redis не підключено — дані зникнуть після перезапуску!)"
-        bot.reply_to(message, f"Завантажено розкладів: {len(SCHEDULES)} · сховище: {mode}\n"
-                              + (", ".join(sorted(SCHEDULES)) or "пусто"))
-        return
-    cname = canon_class(cname_raw)
-    if cname not in CLASSES:
-        bot.reply_to(message, f"Класу {html.escape(cname)} немає. Список: /class. "
-                              f"Додати: /addclass 6-Г <ID>")
-        return
-    if text.lower() in ("сброс", "удалить", "delete"):
-        SCHEDULES.pop(cname, None)
-        if kv_enabled():
-            store = kv_load("hwbot:schedules", {})
-            store.pop(cname, None)
-            kv_save("hwbot:schedules", store)
-        bot.reply_to(message, f"Розклад {cname} видалено — клас перейде в режим "
-                              "«усі свіжі завдання із сайту».")
-        return
-    if not text:
-        bot.reply_to(message, "Не бачу тексту розкладу: надішли його в команді або у відповідь на повідомлення.")
-        return
-    status = bot.reply_to(message, "Розбираю розклад і звіряю із сайтом… ⏱️")
-    site_list = site_subjects(cname)
-    prompt = (
-        "Нижче — розклад уроків, надісланий текстом (може бути неохайним), "
-        "і точний список назв предметів зі шкільного сайту.\n"
-        "Склади розклад за днями ПН–ПТ. Кожному предмету підбери НАЙБЛИЖЧУ "
-        "назву зі списку сайту (скорочення розкривай: «Фіз. виховання» = «Фізична "
-        "культура», «Укр літ.» = «Українська література»). Якщо предмет не схожий на "
-        "жоден зі списку — залиш його як є. Предмет, що повторюється в один день, записуй один раз. "
-        'Поверни ЛИШЕ JSON: {"0": ["предмет", ...], "1": [...], "2": [...], "3": [...], "4": [...]}, '
-        "де 0=ПН, 1=ВТ, 2=СР, 3=ЧТ, 4=ПТ.\n\n"
-        f"Назви із сайту: {'; '.join(site_list) if site_list else '(сайт недоступний)'}\n\n"
-        f"Розклад:\n{text[:3000]}"
-    )
-    raw = call_gemini(prompt, json_mode=True, temperature=0.0)
-    if not raw:
-        bot.edit_message_text("ШІ зараз недоступний, спробуй пізніше.",
-                              message.chat.id, status.message_id)
-        return
-    try:
-        sched_raw = parse_json(raw)
-    except Exception:
-        bot.edit_message_text("Не вдалося розібрати розклад, надішли текст чіткіше.",
-                              message.chat.id, status.message_id)
-        return
-    sched = {}
-    for i in range(5):
-        day = sched_raw.get(str(i))
-        if isinstance(day, list):
-            items = [str(s).strip()[:40] for s in day if str(s).strip()]
-            if items:
-                sched[str(i)] = items[:12]
-    if not sched:
-        bot.edit_message_text("У тексті не знайдено предметів за днями. Перевір і надішли ще раз.",
-                              message.chat.id, status.message_id)
-        return
-    SCHEDULES[cname] = sched
-    if kv_enabled():
-        store = kv_load("hwbot:schedules", {})
-        store[cname] = sched
-        kv_save("hwbot:schedules", store)
-    else:
-        _SCHED_MEM[cname] = sched
-    names = ["ПН", "ВТ", "СР", "ЧТ", "ПТ"]
-    show = "\n\n".join(f"<b>{names[i]}</b>: " + (", ".join(sched.get(str(i), [])) or "—")
-                       for i in range(5))
-    warn = ("\n\n⚠️ Сайт был недоступен — проверь названия: если они не как на сайте, "
-            "фильтр «на завтра» может работать неточно.") if not site_list else ""
-    how = "у Redis — переживе перезапуск" if kv_enabled() else "У ПАМ’ЯТІ — Redis не підключено, дані зникнуть після перезапуску!"
-    bot.edit_message_text(f"✅ Розклад {html.escape(cname)} збережено {how}:\n\n{show}{warn}",
-                          message.chat.id, status.message_id, parse_mode="HTML")
+    bot.reply_to(message, "⚠️ Розклад для 8-Б вже заданий автоматично в коді.\n"
+                           "Доступні команди:\n"
+                           "/hw — домашнє завдання\n"
+                           "/schedule — показати розклад")
 
 
 @bot.message_handler(commands=["addclass"])
 def cmd_addclass(message):
-    if message.from_user.id != ADMIN_ID:
-        bot.reply_to(message, "Команда лише для адміністратора.")
-        return
-    parts = message.text.split()
-    if len(parts) != 3 or not parts[2].isdigit():
-        bot.reply_to(message, "Так: /addclass 6-Г 27\n(ID — внутрішній номер класу на сайті)")
-        return
-    name = canon_class(parts[1])
-    CLASSES[name] = parts[2]
-    if kv_enabled():
-        extras = kv_load("hwbot:extra_classes", {})
-        extras[name] = parts[2]
-        kv_save("hwbot:extra_classes", extras)
-    bot.reply_to(message, f"✅ Клас {name} додано (ID {parts[2]}). "
-                          "Далі: /setschedule для розкладу, /class — для вибору.")
+    bot.reply_to(message, "❌ Команду /addclass вимкнено. Розклад для 8-Б заданий автоматично.")
 
 
 def run_quiz(message, subject, topic):
@@ -1891,18 +1856,18 @@ def cmd_subjects(message):
     if not gate(message, cooldown=False):
         return
     cname = user_class(message.chat.id)
-    keys = SUBJECT_KEYS_BY_CLASS.get(cname, SUBJECT_KEYS)
+    keys = SUBJECT_KEYS
     if not keys:
         bot.send_message(
             message.chat.id,
             f"📚 Для {html.escape(cname)} підручники поки не підключено — і це не заважає:\n"
-            "• надішли <b>фото завдання</b> — розв’яжу й поясню\n"
+            "• надішли <b>фото завдання</b> — розв'яжу й поясню\n"
             "• або напиши запитання текстом\n"
             "• працюють /hw, /cards, /quiz, /exam, /formulas\n\n"
-            "Щоб я розв’язував точніше за програмою — просто надішли фото сторінки із завданням.",
+            "Щоб я розв'язував точніше за програмою — просто надішли фото сторінки із завданням.",
             parse_mode="HTML")
         return
-    bot.send_message(message.chat.id, f"Доступні предмети ({html.escape(cname)}):\n"
+    bot.send_message(message.chat.id, f"Доступні предмети:\n"
                                       + "\n".join(f"• {s}" for s in SUBJECTS))
 
 
@@ -1919,10 +1884,6 @@ def cmd_subject(message):
     key = resolve_subject(args[1])
     if not key:
         bot.reply_to(message, "Не знаю такого предмета. Список: /subjects")
-        return
-    if user_class(message.chat.id) in CLASSES_WITHOUT_BOOKS:
-        bot.reply_to(message, "Для твого класу підручники не підключено, обирати предмет не потрібно — "
-                              "просто надішли фото завдання або напиши запитання.")
         return
     settings[uid]["subject"] = key
     bot.reply_to(message, f"Предмет обрано: {subject_label(key)}. Тепер можна писати завдання без назви предмета.")
@@ -1957,7 +1918,9 @@ def cmd_quick(message):
 @bot.message_handler(commands=["reset"])
 def cmd_reset(message):
     if gate(message, cooldown=False):
-        history[message.from_user.id].clear()
+        uid = message.from_user.id
+        history[uid].clear()
+        DOCS.pop(uid, None)
         bot.reply_to(message, "Пам’ять діалогу очищено.")
 
 
@@ -2370,10 +2333,13 @@ def _daily_admin_report():
     if not ADMIN_ID:
         return
     now = datetime.now(KYIV)
-    if now.hour < ADMIN_REPORT_HOUR or _last_report == now.date():
+    today_iso = now.date().isoformat()
+    if now.hour < ADMIN_REPORT_HOUR or _last_report == today_iso:
         return
-    _last_report = now.date()
-    today = now.date().isoformat()
+    if not once("hwbot:admin_report"):
+        return
+    _last_report = today_iso
+    today = today_iso
     reqs = sum(u["days"].get(today, 0) for u in stats["users"].values())
     active = sum(1 for u in stats["users"].values() if u["days"].get(today, 0))
     redis_ok = "не підключено"
@@ -2445,9 +2411,9 @@ def on_document(message):
     question = (message.caption or "").strip()
     if not question:
         head = html.escape(text[:600])
+        DOCS.set(uid, {"text": text[:MAX_PDF_CHARS], "ts": time.time()})
         bot.edit_message_text(
-            "📄 Файл прочитано. Тепер перешли цей самий файл із підписом, що з ним зробити, "
-            "наприклад: «поясни тему», «розв’яжи завдання 3», «склади тест за файлом».\n\n"
+            f"📄 Файл прочитано. Задавай питання за ним (зберігається 30 хв).\n\n"
             f"<b>Початок документа:</b>\n{head}",
             message.chat.id, status.message_id, parse_mode="HTML")
         return
@@ -2472,7 +2438,6 @@ def on_document(message):
 # ===========================================================================
 QDAY_HOUR = 18
 _qday_last = None
-QDAY_CACHE = {}                    # token -> ответ
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("qday:"))
@@ -2487,11 +2452,9 @@ def on_qday_answer(call):
 
 
 def _question_of_the_day():
-    global _qday_last
     now = datetime.now(KYIV)
-    if now.hour < QDAY_HOUR or _qday_last == now.date():
+    if now.hour < QDAY_HOUR or not once("qday"):
         return
-    _qday_last = now.date()        # флаг ставим сразу: один раз в день, без повторов
     subjects = [s for s in SUBJECTS if book_path(s)]
     if not subjects:
         return
@@ -2517,8 +2480,7 @@ def _question_of_the_day():
     if not q or not a:
         return
     token = uuid.uuid4().hex[:8]
-    QDAY_CACHE[token] = a
-    _trim(QDAY_CACHE, 50)
+    QDAY_CACHE.set(token, a)
     kb = InlineKeyboardMarkup()
     kb.add(InlineKeyboardButton("💡 Показати відповідь", callback_data=f"qday:{token}"))
     text = f"❓ <b>Запитання дня</b> ({html.escape(subj)})\n\n{html.escape(q)}"
@@ -2529,9 +2491,19 @@ def _question_of_the_day():
             log.exception("Запитання дня: не отправилось в %s", chat_id)
 # ===========================================================================
 # /exam - пробна контрольна
+def _alive(d, uid, ttl=1800):
+    """Проверка и очистка устаревших записей состояния с TTL."""
+    s = d.get(uid)
+    if s and time.time() - s.get("ts", 0) > ttl:
+        d.pop(uid, None)
+        return False
+    return bool(s)
+
+
 # ===========================================================================
 EXAM_QCOUNT = 5
-EXAM = {}   # uid -> {"items", "answers", "pos", "chat", "subject"}
+EXAM = {}   # uid -> {"items", "answers", "pos", "chat", "subject", "ts"}
+EXAM_TTL = 1800   # 30 хвилин: якщо учень не продовжує — контрольна видаляється
 
 
 @bot.message_handler(commands=["exam"])
@@ -2546,10 +2518,10 @@ def cmd_exam(message):
         else:
             bot.reply_to(message, "Контрольна ще не розпочиналася. Почати: /exam фізика")
         return
-    if uid in FORMULA:
+    if _alive(FORMULA, uid):
         bot.reply_to(message, "Спочатку заверши тренажер формул (/formulas стоп).")
         return
-    if uid in EXAM:
+    if _alive(EXAM, uid):
         bot.reply_to(message, "Контрольна вже триває — відповідай на поточне запитання або /exam стоп.")
         return
     subject = resolve_subject(args[1]) if len(args) > 1 else settings[uid].get("subject")
@@ -2589,7 +2561,7 @@ def cmd_exam(message):
             bot.edit_message_text("Не вдалося скласти варіант, спробуй ще раз.",
                                   message.chat.id, status.message_id)
             return
-        EXAM[uid] = {"items": items, "answers": [], "pos": 0,
+        EXAM[uid] = {"items": items, "answers": [], "pos": 0, "ts": time.time(),
                      "chat": message.chat.id, "subject": subject}
         register_use(uid, message.from_user.first_name)
         bot.delete_message(message.chat.id, status.message_id)
@@ -2615,13 +2587,14 @@ def _exam_ask(uid):
     bot.send_message(s["chat"], text, parse_mode="HTML")
 
 
-@bot.message_handler(func=lambda m: m.from_user.id in EXAM
-                     and not m.text.startswith("/")
-                     and m.chat.id == EXAM[m.from_user.id]["chat"],
-                     content_types=["text"])
+@bot.message_handler(func=lambda m: _alive(EXAM, m.from_user.id)
+                      and not m.text.startswith("/")
+                      and m.chat.id == EXAM[m.from_user.id]["chat"],
+                      content_types=["text"])
 def on_exam_answer(message):
     uid = message.from_user.id
     s = EXAM[uid]
+    s["ts"] = time.time()   # живим TTL при кожній відповіді
     s["answers"].append(message.text.strip()[:500])
     s["pos"] += 1
     if s["pos"] < len(s["items"]):
@@ -2694,7 +2667,7 @@ def cmd_formulas(message):
         else:
             bot.reply_to(message, "Тренажер ще не запускався. Почати: /formulas фізика")
         return
-    if uid in EXAM:
+    if _alive(EXAM, uid):
         bot.reply_to(message, "Спочатку заверши контрольну (/exam стоп).")
         return
     subject = resolve_subject(args[1]) if len(args) > 1 else settings[uid].get("subject")
@@ -2735,7 +2708,7 @@ def cmd_formulas(message):
                                   message.chat.id, status.message_id)
             return
         FORMULA[uid] = {"items": items, "pos": 0, "right": 0,
-                        "chat": message.chat.id, "subject": subject}
+                        "chat": message.chat.id, "subject": subject, "ts": time.time()}
         register_use(uid, message.from_user.first_name)
         bot.delete_message(message.chat.id, status.message_id)
         _formula_ask(uid)
@@ -2760,13 +2733,14 @@ def _formula_ask(uid):
     bot.send_message(f["chat"], text, parse_mode="HTML")
 
 
-@bot.message_handler(func=lambda m: m.from_user.id in FORMULA
-                     and not m.text.startswith("/")
-                     and m.chat.id == FORMULA[m.from_user.id]["chat"],
-                     content_types=["text"])
+@bot.message_handler(func=lambda m: _alive(FORMULA, m.from_user.id)
+                      and not m.text.startswith("/")
+                      and m.chat.id == FORMULA[m.from_user.id]["chat"],
+                      content_types=["text"])
 def on_formula_answer(message):
     uid = message.from_user.id
     f = FORMULA[uid]
+    f["ts"] = time.time()   # живим TTL при кожній відповіді
     it = f["items"][f["pos"]]
     status = bot.reply_to(message, "Перевіряю… ⏱️")
     prompt = (
@@ -2908,13 +2882,39 @@ def on_text(message):
         bot.reply_to(message, f"Предмет обрано: {subject_label(subject)}. Тепер пиши завдання.")
         return
     subject = subject or settings[uid]["subject"]
-    dispatch(message, "answer", subject, task, [])# Словник із твоїм розкладом 8-Б
+    dispatch(message, "answer", subject, task, [])
+
+
+def _get_bot_username():
+    try:
+        return bot.get_me().username
+    except Exception:
+        return None
+
+
+BOT_USERNAME = None  # заполняется при старте бота
+
+
+def addressed(m):
+    """True, если бот адресован в групповом чате."""
+    if m.chat.type == "private":
+        return True
+    text = (m.text or "") + "@"
+    return f"@{BOT_USERNAME}" in text or bool(
+        m.reply_to_message
+        and m.reply_to_message.from_user
+        and m.reply_to_message.from_user.username == BOT_USERNAME
+    )
+
 
 # ===========================================================================
 # Мини-веб-сервер (нужен Render, чтобы считать сервис живым; на него же
 # можно направить UptimeRobot, чтобы бесплатный сервис не засыпал)
 # ===========================================================================
 class Ping(BaseHTTPRequestHandler):
+    def __init__(self, request, client_address, server):
+        super().__init__(request, client_address, server)
+
     def do_GET(self):
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
@@ -2925,7 +2925,7 @@ class Ping(BaseHTTPRequestHandler):
         self.send_response(200)
         self.end_headers()
 
-    def log_message(self, *args):
+    def log_message(self, format, *args):
         pass
 
 
@@ -2940,63 +2940,67 @@ def run_web():
 # ===========================================================================
 # Запуск
 # ===========================================================================
+_last_inline_gen = {}
+
+
+@bot.inline_handler(func=lambda q: len(q.query.strip()) >= 10)
+def on_inline(query):
+    uid = query.from_user.id
+    if ALLOWED_IDS and uid not in ALLOWED_IDS and uid != ADMIN_ID:
+        bot.answer_inline_query(query.id, [], cache_time=1)
+        return
+    q = query.query.strip()
+    key = q.lower()
+    hit = INLINE_CACHE.get(key)
+    if hit and time.time() - hit[0] < 1800:
+        title, text = hit[1]
+    else:
+        if time.time() - _last_inline_gen.get(uid, 0) < 2:  # не чаще раза в 2 сек
+            bot.answer_inline_query(query.id, [], cache_time=0)
+            return
+        _last_inline_gen[uid] = time.time()
+        if limit_reached(uid):
+            bot.answer_inline_query(query.id, [], cache_time=1)
+            return
+        answer = call_gemini([f"Відповідай коротко (до 100 слів) на запитання учня:\n{q[:500]}"],
+                             system_instruction=SYSTEM_BASE, temperature=0.2)
+        if not answer:
+            bot.answer_inline_query(query.id, [], cache_time=1)
+            return
+        register_use(uid, query.from_user.first_name)
+        text = sanitize_html(answer)
+        title = q[:64]
+        INLINE_CACHE.set(key, (time.time(), (title, text)))
+    try:
+        art = tg.InlineQueryResultArticle(
+            query.id, title,
+            tg.InputTextMessageContent(text, parse_mode="HTML"),
+            description="Відповідь ШІ · натисни, щоб надіслати в чат")
+        bot.answer_inline_query(query.id, [art], cache_time=10)
+    except Exception:
+        log.exception("Ошибка inline")
+
+# ===========================================================================
+# Catch-all callback — всегда последний обработчик
+# ===========================================================================
+@bot.callback_query_handler(func=lambda call: bool(call.data))
+def on_unhandled_callback(call):
+    bot.answer_callback_query(
+        call.id,
+        "\u0426\u044f \u043a\u043d\u043e\u043f\u043a\u0430 \u0431\u0456\u043b\u044c\u0448\u0435 \u043d\u0435 \u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430. \u041d\u0430\u043f\u0438\u0448\u0438 /help.",
+        show_alert=True,
+    )
+
+
 if __name__ == "__main__":
     threading.Thread(target=run_web, daemon=True).start()
     threading.Thread(target=preload_books, daemon=True).start()
     threading.Thread(target=broadcast_loop, daemon=True).start()
     threading.Thread(target=daily_loop, daemon=True).start()
-    log.info("Бот запущено. Модели: %s | ключей Gemini: %d", ", ".join(MODELS), len(API_KEYS))
-    # ===========================================================================
-    # Инлайн-режим: @имя_бота вопрос - в любом чате
-    # ===========================================================================
-    INLINE_CACHE = {}
-    _last_inline_gen = {}
-
-
-    @bot.inline_handler(func=lambda q: len(q.query.strip()) >= 10)
-    def on_inline(query):
-        uid = query.from_user.id
-        if ALLOWED_IDS and uid not in ALLOWED_IDS and uid != ADMIN_ID:
-            bot.answer_inline_query(query.id, [], cache_time=1)
-            return
-        q = query.query.strip()
-        key = q.lower()
-        hit = INLINE_CACHE.get(key)
-        if hit and time.time() - hit[0] < 1800:
-            title, text = hit[1]
-        else:
-            if time.time() - _last_inline_gen.get(uid, 0) < 2:  # не чаще раза в 2 сек
-                bot.answer_inline_query(query.id, [], cache_time=0)
-                return
-            _last_inline_gen[uid] = time.time()
-            if limit_reached(uid):
-                bot.answer_inline_query(query.id, [], cache_time=1)
-                return
-            answer = call_gemini([f"Відповідай коротко (до 100 слів) на запитання учня:\n{q[:500]}"],
-                                 system_instruction=SYSTEM_BASE, temperature=0.2)
-            if not answer:
-                bot.answer_inline_query(query.id, [], cache_time=1)
-                return
-            register_use(uid, query.from_user.first_name)
-            text = sanitize_html(answer)
-            title = q[:64]
-            INLINE_CACHE[key] = (time.time(), (title, text))
-            _trim(INLINE_CACHE, 200)
-        try:
-            art = tg.InlineQueryResultArticle(
-                query.id, title,
-                tg.InputTextMessageContent(text, parse_mode="HTML"),
-                description="Відповідь ШІ · натисни, щоб надіслати в чат")
-            bot.answer_inline_query(query.id, [art], cache_time=10)
-        except Exception:
-            log.exception("Ошибка inline")
-    @bot.callback_query_handler(func=lambda call: bool(call.data))
-    def on_unhandled_callback(call):
-        bot.answer_callback_query(
-            call.id,
-            "\u0426\u044f \u043a\u043d\u043e\u043f\u043a\u0430 \u0431\u0456\u043b\u044c\u0448\u0435 \u043d\u0435 \u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430. \u041d\u0430\u043f\u0438\u0448\u0438 /help.",
-            show_alert=True,
-        )
+    # BOT_USERNAME нужен для проверки «адресован боту» в групповых чатах.
+    BOT_USERNAME = _get_bot_username()
+    log.info("Бот запущено. Модели: %s | ключей Gemini: %d | @%s",
+             ", ".join(MODELS), len(API_KEYS), BOT_USERNAME)
 
     while True:
         try:
