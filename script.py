@@ -94,7 +94,7 @@ class LRU:
 
 
 # ===========================================================================
-# Настройки - ВСЕ секреты только через переменные окружения (Render -> Environment)
+# ÐÐ°ÑÑ‚Ñ€Ð¾Ð¹ÐºÐ¸ - Ð’Ð¡Ð• ÑÐµÐºÑ€ÐµÑ‚Ñ‹ Ñ‚Ð¾Ð»ÑŒÐºÐ¾ Ñ‡ÐµÑ€ÐµÐ· Ð¿ÐµÑ€ÐµÐ¼ÐµÐ½Ð½Ñ‹Ðµ Ð¾ÐºÑ€ÑƒÐ¶ÐµÐ½Ð¸Ñ (Render -> Environment)
 # ===========================================================================
 #   TELEGRAM_TOKEN   - токен от @BotFather                         (обязательно)
 #   GEMINI_API_KEYS  - ключи Gemini через запятую                  (обязательно)
@@ -122,9 +122,9 @@ if not API_KEYS:
     raise SystemExit("Не задано ключів Gemini: вкажи GEMINI_API_KEYS (через кому).")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-BOOKS_DIR = os.path.join(BASE_DIR, "книги")
-DATA_DIR = os.path.join(BASE_DIR, "data")      # статистика (на Render не сохраняется)
-CACHE_DIR = os.path.join(BASE_DIR, "cache")    # кэш текста учебников (можно коммитить)
+BOOKS_DIR = os.path.join(BASE_DIR, "ÐºÐ½Ð¸Ð³Ð¸")
+DATA_DIR = os.path.join(BASE_DIR, "data")      # ÑÑ‚Ð°Ñ‚Ð¸ÑÑ‚Ð¸ÐºÐ° (Ð½Ð° Render Ð½Ðµ ÑÐ¾Ñ…Ñ€Ð°Ð½ÑÐµÑ‚ÑÑ)
+CACHE_DIR = os.path.join(BASE_DIR, "cache")    # ÐºÑÑˆ Ñ‚ÐµÐºÑÑ‚Ð° ÑƒÑ‡ÐµÐ±Ð½Ð¸ÐºÐ¾Ð² (Ð¼Ð¾Ð¶Ð½Ð¾ ÐºÐ¾Ð¼Ð¼Ð¸Ñ‚Ð¸Ñ‚ÑŒ)
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(CACHE_DIR, exist_ok=True)
 
@@ -380,7 +380,7 @@ def on_rewrite(call):
         except Exception:
             pass
 # ===========================================================================
-# Состояние пользователей
+# Ð¡Ð¾ÑÑ‚Ð¾ÑÐ½Ð¸Ðµ Ð¿Ð¾Ð»ÑŒÐ·Ð¾Ð²Ð°Ñ‚ÐµÐ»ÐµÐ¹
 # ===========================================================================
 settings = defaultdict(lambda: {"length": "normal", "subject": None})
 history = defaultdict(list)       # uid -> [(вопрос, ответ), ...]
@@ -408,7 +408,7 @@ HW_DONE = {}           # token -> {номера выполненных зада�
 DOCS = LRU(50)         # uid -> {"text": ..., "question": ...} контекст учителя
 
 # ===========================================================================
-# Статистика и лимиты
+# Ð¡Ñ‚Ð°Ñ‚Ð¸ÑÑ‚Ð¸ÐºÐ° Ð¸ Ð»Ð¸Ð¼Ð¸Ñ‚Ñ‹
 # ===========================================================================
 KV_URL = os.environ.get("UPSTASH_REDIS_REST_URL", "").rstrip("/")
 KV_TOKEN = os.environ.get("UPSTASH_REDIS_REST_TOKEN", "")
@@ -593,13 +593,13 @@ def _save_flag(key, value):
 
 
 # ===========================================================================
-# Безопасная отправка ответов (HTML Telegram)
+# Ð‘ÐµÐ·Ð¾Ð¿Ð°ÑÐ½Ð°Ñ Ð¾Ñ‚Ð¿Ñ€Ð°Ð²ÐºÐ° Ð¾Ñ‚Ð²ÐµÑ‚Ð¾Ð² (HTML Telegram)
 # ===========================================================================
 ALLOWED_TAGS = ("b", "i", "u", "code", "pre")
 
 
 def sanitize_html(text):
-    """Оставляет только разрешённые теги, всё остальное экранирует."""
+    """ÐžÑÑ‚Ð°Ð²Ð»ÑÐµÑ‚ Ñ‚Ð¾Ð»ÑŒÐºÐ¾ Ñ€Ð°Ð·Ñ€ÐµÑˆÑ‘Ð½Ð½Ñ‹Ðµ Ñ‚ÐµÐ³Ð¸, Ð²ÑÑ‘ Ð¾ÑÑ‚Ð°Ð»ÑŒÐ½Ð¾Ðµ ÑÐºÑ€Ð°Ð½Ð¸Ñ€ÑƒÐµÑ‚."""
     text = re.sub(r"<(/?)strong>", r"<\1b>", text, flags=re.I)
     text = re.sub(r"<(/?)em>", r"<\1i>", text, flags=re.I)
     text = re.sub(r"<br\s*/?>", "\n", text, flags=re.I)
@@ -653,7 +653,7 @@ def send_answer(chat_id, status_msg, text, uid=None, task=None, subject=None):
                 bot.send_message(chat_id, chunk, parse_mode="HTML", reply_markup=m)
             continue
         except Exception as e:
-            log.warning("HTML не прошёл, отправляю без разметки: %s", e)
+            log.warning("HTML Ð½Ðµ Ð¿Ñ€Ð¾ÑˆÑ‘Ð», Ð¾Ñ‚Ð¿Ñ€Ð°Ð²Ð»ÑÑŽ Ð±ÐµÐ· Ñ€Ð°Ð·Ð¼ÐµÑ‚ÐºÐ¸: %s", e)
         plain = strip_tags(chunk)
         try:
             if first:
@@ -664,7 +664,7 @@ def send_answer(chat_id, status_msg, text, uid=None, task=None, subject=None):
             bot.send_message(chat_id, plain, reply_markup=m)
 
 # ===========================================================================
-# PDF: загрузка, кэш, поиск нужных страниц
+# PDF: Ð·Ð°Ð³Ñ€ÑƒÐ·ÐºÐ°, ÐºÑÑˆ, Ð¿Ð¾Ð¸ÑÐº Ð½ÑƒÐ¶Ð½Ñ‹Ñ… ÑÑ‚Ñ€Ð°Ð½Ð¸Ñ†
 # ===========================================================================
 _pages_cache = {}
 _index_cache = {}
@@ -673,8 +673,8 @@ _index_lock = threading.Lock()
 
 
 def load_pages(pdf_path):
-    """Читает учебник один раз. Кэш на диске привязан к имени файла и его размеру
-    (а не к пути и времени изменения), поэтому работает и после деплоя на сервер."""
+    """Ð§Ð¸Ñ‚Ð°ÐµÑ‚ ÑƒÑ‡ÐµÐ±Ð½Ð¸Ðº Ð¾Ð´Ð¸Ð½ Ñ€Ð°Ð·. ÐšÑÑˆ Ð½Ð° Ð´Ð¸ÑÐºÐµ Ð¿Ñ€Ð¸Ð²ÑÐ·Ð°Ð½ Ðº Ð¸Ð¼ÐµÐ½Ð¸ Ñ„Ð°Ð¹Ð»Ð° Ð¸ ÐµÐ³Ð¾ Ñ€Ð°Ð·Ð¼ÐµÑ€Ñƒ
+    (Ð° Ð½Ðµ Ðº Ð¿ÑƒÑ‚Ð¸ Ð¸ Ð²Ñ€ÐµÐ¼ÐµÐ½Ð¸ Ð¸Ð·Ð¼ÐµÐ½ÐµÐ½Ð¸Ñ), Ð¿Ð¾ÑÑ‚Ð¾Ð¼Ñƒ Ñ€Ð°Ð±Ð¾Ñ‚Ð°ÐµÑ‚ Ð¸ Ð¿Ð¾ÑÐ»Ðµ Ð´ÐµÐ¿Ð»Ð¾Ñ Ð½Ð° ÑÐµÑ€Ð²ÐµÑ€."""
     if pdf_path in _pages_cache:
         return _pages_cache[pdf_path]
     with _load_lock:
@@ -691,11 +691,11 @@ def load_pages(pdf_path):
             try:
                 with open(cache_file, encoding="utf-8") as f:
                     d = json.load(f)
-                if d.get("size") == size:
+                if d.get("size") == size and d.get("mtime_ns") == mtime_ns:
                     _pages_cache[pdf_path] = tuple(d["pages"])
                     return _pages_cache[pdf_path]
             except Exception:
-                log.warning("Кэш повреждён, читаю PDF заново: %s", name)
+                log.warning("ÐšÑÑˆ Ð¿Ð¾Ð²Ñ€ÐµÐ¶Ð´Ñ‘Ð½, Ñ‡Ð¸Ñ‚Ð°ÑŽ PDF Ð·Ð°Ð½Ð¾Ð²Ð¾: %s", name)
 
         pages = []
         try:
@@ -703,14 +703,14 @@ def load_pages(pdf_path):
             for page in reader.pages:
                 pages.append((page.extract_text() or "").strip())
         except Exception:
-            log.exception("Ошибка чтения PDF: %s", pdf_path)
+            log.exception("ÐžÑˆÐ¸Ð±ÐºÐ° Ñ‡Ñ‚ÐµÐ½Ð¸Ñ PDF: %s", pdf_path)
 
         pages = tuple(pages)
         try:
             with open(cache_file, "w", encoding="utf-8") as f:
                 json.dump({"size": size, "mtime_ns": mtime_ns, "pages": list(pages)}, f, ensure_ascii=False)
         except Exception:
-            log.warning("Не удалось сохранить кэш для %s", name)
+            log.warning("ÐÐµ ÑƒÐ´Ð°Ð»Ð¾ÑÑŒ ÑÐ¾Ñ…Ñ€Ð°Ð½Ð¸Ñ‚ÑŒ ÐºÑÑˆ Ð´Ð»Ñ %s", name)
 
         _pages_cache[pdf_path] = pages
         return pages
@@ -790,7 +790,7 @@ def find_context(pdf_path, task):
     best = sorted(i for sc, i in score_pages(pdf_path, task)[:TOP_PAGES] if sc >= 5)
     chunks, used, total = [], [], 0
     for i in best:
-        chunk = f"[Страница {i + 1}]\n{pages[i]}"
+        chunk = f"[Ð¡Ñ‚Ñ€Ð°Ð½Ð¸Ñ†Ð° {i + 1}]\n{pages[i]}"
         if total + len(chunk) > MAX_CONTEXT_CHARS:
             break
         chunks.append(chunk); used.append(i + 1); total += len(chunk)
@@ -842,7 +842,7 @@ def preload_books():
 
 
 # ===========================================================================
-# Gemini (несколько ключей с ротацией)
+# Gemini (Ð½ÐµÑÐºÐ¾Ð»ÑŒÐºÐ¾ ÐºÐ»ÑŽÑ‡ÐµÐ¹ Ñ Ñ€Ð¾Ñ‚Ð°Ñ†Ð¸ÐµÐ¹)
 # ===========================================================================
 _key_blocked = {}   # ключ -> время, до которого он считается вичерпаноным
 _key_lock = threading.Lock()
@@ -887,7 +887,7 @@ def call_gemini(contents, system_instruction=None, json_mode=False, temperature=
         try:
             gclient = _get_client(api_key)
         except Exception as e:
-            log.warning("Ключ #%d: ошибка инициализации: %s", idx, e)
+            log.warning("ÐšÐ»ÑŽÑ‡ #%d: Ð¾ÑˆÐ¸Ð±ÐºÐ° Ð¸Ð½Ð¸Ñ†Ð¸Ð°Ð»Ð¸Ð·Ð°Ñ†Ð¸Ð¸: %s", idx, e)
             continue
 
         for model in MODELS:
@@ -923,12 +923,12 @@ def call_gemini(contents, system_instruction=None, json_mode=False, temperature=
                     if attempt < GEMINI_RETRIES:
                         time.sleep(0.35)
 
-    log.error("Все ключи и модели недоступны: %s", last_error)
+    log.error("Ð’ÑÐµ ÐºÐ»ÑŽÑ‡Ð¸ Ð¸ Ð¼Ð¾Ð´ÐµÐ»Ð¸ Ð½ÐµÐ´Ð¾ÑÑ‚ÑƒÐ¿Ð½Ñ‹: %s", last_error)
     return None
 
 
 def extract_task(media):
-    """Достаёт текст задания из фото или голосового сообщения."""
+    """Ð”Ð¾ÑÑ‚Ð°Ñ‘Ñ‚ Ñ‚ÐµÐºÑÑ‚ Ð·Ð°Ð´Ð°Ð½Ð¸Ñ Ð¸Ð· Ñ„Ð¾Ñ‚Ð¾ Ð¸Ð»Ð¸ Ð³Ð¾Ð»Ð¾ÑÐ¾Ð²Ð¾Ð³Ð¾ ÑÐ¾Ð¾Ð±Ñ‰ÐµÐ½Ð¸Ñ."""
     return call_gemini(
         [
             "Якщо це зображення, дослівно перепиши текст завдання (формули "
@@ -941,7 +941,7 @@ def extract_task(media):
 
 
 def history_text(uid):
-    return "\n".join(f"Ученик: {q[:600]}\nПомощник: {a[:600]}" for q, a in history[uid][-HISTORY_TURNS:])
+    return "\n".join(f"Ð£Ñ‡ÐµÐ½Ð¸Ðº: {q[:600]}\nÐŸÐ¾Ð¼Ð¾Ñ‰Ð½Ð¸Ðº: {a[:600]}" for q, a in history[uid][-HISTORY_TURNS:])
 
 
 def build_prompt(mode, context, task, uid):
@@ -965,7 +965,7 @@ def build_system(uid):
 
 
 # ===========================================================================
-# Вспомогательные функции
+# Ð’ÑÐ¿Ð¾Ð¼Ð¾Ð³Ð°Ñ‚ÐµÐ»ÑŒÐ½Ñ‹Ðµ Ñ„ÑƒÐ½ÐºÑ†Ð¸Ð¸
 # ===========================================================================
 def resolve_subject(word):
     word = word.lower().strip(".,:;!?")
@@ -981,7 +981,7 @@ def resolve_subject(word):
 
 
 def split_subject(text):
-    """'физика задача 3.5' -> ('физика', 'задача 3.5')"""
+    """'Ñ„Ð¸Ð·Ð¸ÐºÐ° Ð·Ð°Ð´Ð°Ñ‡Ð° 3.5' -> ('Ñ„Ð¸Ð·Ð¸ÐºÐ°', 'Ð·Ð°Ð´Ð°Ñ‡Ð° 3.5')"""
     parts = text.strip().split(maxsplit=1)
     if not parts:
         return None, ""
@@ -1039,8 +1039,38 @@ def book_path_any(subject):
     return None
 
 
+def _all_files_for_subject(stem):
+    """Returns list of candidate filenames sharing the same language-agnostic stem."""
+    try:
+        prefix = re.split(r'[\-_ ]+', stem)[0].lower()
+    except Exception:
+        prefix = stem.lower()[:6]
+    candidates = [SUBJECTS.get(stem)]
+    for k, fn in SUBJECTS.items():
+        if k != stem and fn.endswith('.pdf'):
+            fname = os.path.splitext(fn)[0]
+            if fname.startswith(prefix) and len(fname) > len(prefix) + 1:
+                candidates.append(fn)
+    return [c for c in candidates if c and os.path.isfile(os.path.join(BOOKS_DIR, c))]
+
+
+def book_path_any(subject):
+    """Try primary file; fall back to any sibling file with the same stem."""
+    primary = book_path(subject)
+    if primary:
+        return primary
+    stem = SUBJECTS.get(subject)
+    if not stem:
+        return None
+    for candidate in _all_files_for_subject(stem):
+        p = os.path.join(BOOKS_DIR, candidate)
+        if os.path.exists(p):
+            return p
+    return None
+
+
 # ===========================================================================
-# Основной конвейер
+# ÐžÑÐ½Ð¾Ð²Ð½Ð¾Ð¹ ÐºÐ¾Ð½Ð²ÐµÐ¹ÐµÑ€
 # ===========================================================================
 
     # Словник із твоїм розкладом 8-Б
@@ -1712,7 +1742,7 @@ def process(chat_id, reply_to, uid, name, mode, subject, task, media):
         reply(full_text, answer)
 
     except Exception:
-        log.exception("Ошибка обработки запроса")
+        log.exception("ÐžÑˆÐ¸Ð±ÐºÐ° Ð¾Ð±Ñ€Ð°Ð±Ð¾Ñ‚ÐºÐ¸ Ð·Ð°Ð¿Ñ€Ð¾ÑÐ°")
         try:
             bot.edit_message_text("Сталася помилка. Спробуй ще раз.", chat_id, status.message_id)
         except Exception:
@@ -1786,7 +1816,7 @@ def run_quiz(message, subject, topic):
                 )
                 sent += 1
             except Exception:
-                log.warning("Пропущен некорректный вопрос: %s", it)
+                log.warning("ÐŸÑ€Ð¾Ð¿ÑƒÑ‰ÐµÐ½ Ð½ÐµÐºÐ¾Ñ€Ñ€ÐµÐºÑ‚Ð½Ñ‹Ð¹ Ð²Ð¾Ð¿Ñ€Ð¾Ñ: %s", it)
 
         register_use(uid, message.from_user.first_name)
         settings[uid]["subject"] = subject
@@ -2848,7 +2878,7 @@ def cmd_quiz(message):
 
 
 # ===========================================================================
-# Фото, голосовые, текст, кнопки
+# Ð¤Ð¾Ñ‚Ð¾, Ð³Ð¾Ð»Ð¾ÑÐ¾Ð²Ñ‹Ðµ, Ñ‚ÐµÐºÑÑ‚, ÐºÐ½Ð¾Ð¿ÐºÐ¸
 # ===========================================================================
 @bot.message_handler(content_types=["photo"])
 def on_photo(message):
@@ -2937,8 +2967,8 @@ def addressed(m):
 
 
 # ===========================================================================
-# Мини-веб-сервер (нужен Render, чтобы считать сервис живым; на него же
-# можно направить UptimeRobot, чтобы бесплатный сервис не засыпал)
+# ÐœÐ¸Ð½Ð¸-Ð²ÐµÐ±-ÑÐµÑ€Ð²ÐµÑ€ (Ð½ÑƒÐ¶ÐµÐ½ Render, Ñ‡Ñ‚Ð¾Ð±Ñ‹ ÑÑ‡Ð¸Ñ‚Ð°Ñ‚ÑŒ ÑÐµÑ€Ð²Ð¸Ñ Ð¶Ð¸Ð²Ñ‹Ð¼; Ð½Ð° Ð½ÐµÐ³Ð¾ Ð¶Ðµ
+# Ð¼Ð¾Ð¶Ð½Ð¾ Ð½Ð°Ð¿Ñ€Ð°Ð²Ð¸Ñ‚ÑŒ UptimeRobot, Ñ‡Ñ‚Ð¾Ð±Ñ‹ Ð±ÐµÑÐ¿Ð»Ð°Ñ‚Ð½Ñ‹Ð¹ ÑÐµÑ€Ð²Ð¸Ñ Ð½Ðµ Ð·Ð°ÑÑ‹Ð¿Ð°Ð»)
 # ===========================================================================
 class Ping(BaseHTTPRequestHandler):
     def __init__(self, request, client_address, server):
@@ -2963,7 +2993,20 @@ def run_web():
     try:
         HTTPServer(("0.0.0.0", port), Ping).serve_forever()
     except Exception:
-        log.exception("Веб-сервер не запустился (порт %s)", port)
+        log.exception("Ð’ÐµÐ±-ÑÐµÑ€Ð²ÐµÑ€ Ð½Ðµ Ð·Ð°Ð¿ÑƒÑÑ‚Ð¸Ð»ÑÑ (Ð¿Ð¾Ñ€Ñ‚ %s)", port)
+
+
+def self_ping():
+    """ÐšÐ°Ð¶Ð´Ñ‹Ðµ 10 Ð¼Ð¸Ð½ ÑÑ‚ÑƒÑ‡Ð¸Ñ‚ÑÑ Ð² ÑÐ²Ð¾Ð¹ health-URL, Ñ‡Ñ‚Ð¾Ð±Ñ‹ Render Ð½Ðµ Ð·Ð°ÑÑ‹Ð¿Ð°Ð»."""
+    url = os.environ.get("SELF_PING_URL", "")
+    if not url:
+        return
+    while True:
+        time.sleep(600)
+        try:
+            urllib.request.urlopen(url, timeout=15)
+        except Exception:
+            pass
 
 
 def self_ping():
@@ -2980,7 +3023,7 @@ def self_ping():
 
 
 # ===========================================================================
-# Запуск
+# Ð—Ð°Ð¿ÑƒÑÐº
 # ===========================================================================
 _last_inline_gen = {}
 
