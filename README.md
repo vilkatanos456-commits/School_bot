@@ -1,33 +1,38 @@
-# School Homework Bot
+Markdown# School Homework Bot
 
-Telegram bot for Ukrainian school homework help (class 8-Б) using Google Gemini AI and PDF textbook parsing.
+Telegram-бот для помощи с учёбой (класс **8-Б**) на базе **Google Gemini**, поиска по PDF-учебникам и автоматического получения домашнего задания со школьного сайта (`sch3.edu.vn.ua`).
 
-## Environment Variables
+## Основные возможности
 
-- `TELEGRAM_TOKEN` — Telegram bot token from @BotFather (required)
-- `GEMINI_API_KEYS` — comma-separated Gemini API keys (required)
-- `GEMINI_MODELS` — comma-separated model names (default: gemini-3.5-flash-lite)
-- `ADMIN_ID` — your Telegram ID (no limits, sees statistics)
-- `ALLOWED_IDS` — comma-separated user IDs; empty = everyone has access
-- `DAILY_LIMIT` — requests per user per day (default: 40)
-- `TOP_PAGES` — textbook pages to return to the model (default: 2)
-- `UPSTASH_REDIS_REST_URL` — Redis REST URL for schedules and stats
-- `UPSTASH_REDIS_REST_TOKEN` — Redis REST token
-- `SELF_PING_URL` — URL used to keep the service awake (self-ping)
+- **Домашнее задание (`/hw` и рассылка):** загружает актуальные задания со школьного сайта по дню недели или «На завтра», позволяет отмечать выполненные пункты (`✅`) и отправлять задания на решение.
+- **Поиск по PDF-учебникам:** читает файлы из папки `книги/`, кэширует извлечённый текст в `cache/` и подбирает релевантные страницы с помощью BM25-подобного ранжирования по IDF и номерам задач.
+- **Фото, голосовые и PDF от учителя:** распознаёт текст с изображений и аудио через Gemini, а также отвечает по присланным PDF-документам.
+- **Учебные режимы и тренажёры:**
+  - `/explain` — пошаговое объяснение решения;
+  - `/check` — проверка решения ученика;
+  - `/summary` — краткая шпаргалка по теме;
+  - `/essay` — написание школьного сочинения/твору;
+  - `/quiz` — тест с опросами;
+  - `/exam` — пробная контрольная с оценкой;
+  - `/formulas` — тренажёр формул и правил;
+  - `/cards` — карточки с интервальным повторением;
+  - `/proofread` — проверка орфографии и пунктуации;
+  - `/remind` и `/pomodoro` — напоминания и таймер учёбы.
+- **Устойчивость:** ротация нескольких API-ключей Gemini при лимитах/ошибках, потокобезопасные LRU-кэши, защита от дублей параллельных запросов и встроенный HTTP-сервер для Render + self-ping.
 
-## Features
+## Запуск
 
-- Homework fetching from school website
-- PDF textbook search with BM25-like IDF scoring
-- Multi-key Gemini API with rotation and retry
-- Thread-safe LRU caches
-- Atomic Redis-backed daily flags
-- Group chat mention detection
-- Document sharing (PDF from teacher)
-
-## Structure
-
-- `script.py` — main bot code
-- `cache/` — cached PDF text (gitignored)
-- `data/` — statistics (not persisted on Render)
-- `книги/` — PDF textbooks
+1. Установи зависимости:
+   ```bash
+   pip install -r requirements.txt
+Положи PDF-учебники в папку книги/ (имена файлов заданы в словаре SUBJECTS в script.py, например фізика.pdf, алгебра.pdf, геометрія.pdf).   Задай переменные окружения и запусти скрипт:Bashexport TELEGRAM_TOKEN="ваш_токен_от_botfather"
+export GEMINI_API_KEYS="ключ_1,ключ_2"
+python script.py
+КомандыКомандаНазначение/hwПолучить домашнее задание со школьного сайта («На завтра» или по дням недели)   /subscribe, /unsubscribeЕжедневная рассылка ДЗ (по умолчанию в 16:00 по киевскому времени)   /scheduleПоказать расписание уроков для 8-Б   /subject <предмет>, /subjectsВыбрать активный предмет или посмотреть список предметов   /explain, /check, /summary, /essayОбъяснить решение, проверить ответ, сделать шпаргалку или написать твір   /quiz, /exam, /formulas, /cardsТест, пробная контрольная, тренажёр формул и карточки повторения   /proofread, /remind, /pomodoroПроверка текста, напоминания и таймер учёбы   /short, /detail, /normal, /quickРежимы длины ответа (от краткого до подробного)   /reset, /stats, /top, /menu, /help, /idОчистка истории диалога, статистика, рейтинг, меню, справка и ID   Переменные окруженияОбязательныеTELEGRAM_TOKEN — токен Telegram-бота от @BotFather.   GEMINI_API_KEYS (или GEMINI_API_KEY) — один или несколько ключей Google Gemini через запятую.   Основные настройки и интеграцииGEMINI_MODELS — модели через запятую (по умолчанию gemini-3.5-flash-lite).   ADMIN_ID — Telegram ID администратора (без дневного лимита, получает отчёты и расширенную /stats).   ALLOWED_IDS — список разрешённых Telegram ID через запятую; если не задан — доступ у всех.   DAILY_LIMIT — лимит запросов на пользователя в сутки (по умолчанию 40).   TOP_PAGES — сколько страниц учебника передавать модели (по умолчанию 2).   UPSTASH_REDIS_REST_URL и UPSTASH_REDIS_REST_TOKEN — подключение Upstash Redis для хранения статистики, подписчиков, карточек, напоминаний, класса и суточных флагов[cite: 3].BROADCAST_IDS — дополнительные ID чатов для рассылки через запятую[cite: 3].PORT — порт мини-веб-сервера для Render (по умолчанию 10000)[cite: 3].SELF_PING_URL — URL для периодического self-ping каждые 10 минут, чтобы сервис не засыпал[cite: 3].Дополнительные параметры тюнингаBOT_THREADS, PRELOAD_WORKERS, HTTP_TIMEOUT, COOLDOWN_SECONDS, GEMINI_CONCURRENCY, GEMINI_RETRIES, GEMINI_MAX_OUTPUT_TOKENS, GEMINI_THINKING_BUDGET, INFLIGHT_TIMEOUT[cite: 3].Структура проектаPlaintext.
+├── script.py          # Основной код бота, парсинг сайта/PDF, команды и фоновые циклы
+├── requirements.txt   # Зависимости Python
+├── .gitignore         # Игнорируемые файлы и директории
+├── книги/             # PDF-учебники по предметам
+├── cache/             # Кэш текста учебников (игнорируется git)
+└── data/              # Локальная статистика и данные (игнорируется git)
+Важно: если UPSTASH_REDIS_REST_URL и UPSTASH_REDIS_REST_TOKEN не настроены, часть данных (подписки, карточки, напоминания, статистика) сохраняется локально или только в памяти и сбрасывается при перезапуске контейнера на Render[cite: 3].
