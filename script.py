@@ -1,6 +1,7 @@
 import uuid
 import hashlib
 import html
+import unicodedata
 import requests
 import json
 import logging
@@ -33,6 +34,7 @@ from io import BytesIO
 
 import telebot
 from telebot import types as tg
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from google import genai
 from google.genai import types as gt
 from pypdf import PdfReader
@@ -1606,9 +1608,8 @@ def process(chat_id, reply_to, uid, name, mode, subject, task, media):
                          reply_to_message_id=reply_to)
         return
 
-    register_use(uid, name)
+    # счёт использования — только при успешном ответе (в reply()), иначе лимит списывается дважды
     history[uid].append((task, "PENDING"))
-
     status = bot.send_message(chat_id, "Шукаю відповідь у підручнику… ⏱️", reply_to_message_id=reply_to)
     bot.send_chat_action(chat_id, "typing")
 
